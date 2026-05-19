@@ -18,13 +18,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@v4
 
-    # ── 2. Qt 6 (via aqtinstall directly — avoids jurplel action Python issues) ──
+    # ── 2. Qt 6 (via aqtinstall directly) ────────────────────────────────────
     - name: Install Qt 6
       run: |
         pip install aqtinstall
-        aqt install-qt windows desktop 6.7.3 win64_msvc2022_64 -O C:\Qt
-        echo "CMAKE_PREFIX_PATH=C:\Qt\6.7.3\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append
-        echo "C:\Qt\6.7.3\msvc2022_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 -O C:\Qt
+        echo "CMAKE_PREFIX_PATH=C:\Qt\6.8.1\msvc2022_64" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "C:\Qt\6.8.1\msvc2022_64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       shell: pwsh
 
     # ── 3. OpenSSL ───────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ jobs:
 
         cmake -B build `
           -G "Visual Studio 17 2022" -A x64 `
-          "-DCMAKE_PREFIX_PATH=C:\Qt\6.7.3\msvc2022_64" `
+          "-DCMAKE_PREFIX_PATH=C:\Qt\6.8.1\msvc2022_64" `
           "-DOPENSSL_ROOT_DIR=$ssl"
 
     # ── 5. Build ─────────────────────────────────────────────────────────────
