@@ -1,0 +1,21 @@
+# Build output
+build/
+dist/
+cryptograf
+cryptograf-gui
+Cryptograf-Setup.exe
+
+# Generated moc file
+src/gui_main.moc
+src/moc_gui_main.cpp
+
+# Encrypted/decrypted test files
+*.enc
+*.dec
+test_*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~

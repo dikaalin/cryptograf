@@ -1,0 +1,113 @@
+name: Windows — Build & Installer
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    name: Build & package (Windows x64 / MSVC 2022)
+    runs-on: windows-latest
+
+    steps:
+    # ── 1. Source ────────────────────────────────────────────────────────────
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    # ── 2. Qt 6 ──────────────────────────────────────────────────────────────
+    - name: Install Qt 6
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.7.3'
+        host: windows
+        target: desktop
+        arch: win64_msvc2022_64
+        cache: true
+
+    # ── 3. OpenSSL ───────────────────────────────────────────────────────────
+    - name: Install OpenSSL
+      run: choco install openssl --no-progress -y
+      shell: pwsh
+
+    # ── 4. Configure ─────────────────────────────────────────────────────────
+    - name: Configure CMake
+      shell: pwsh
+      run: |
+        # Locate OpenSSL (choco installs to one of these paths)
+        $ssl = @(
+          'C:\Program Files\OpenSSL-Win64',
+          'C:\OpenSSL-Win64',
+          'C:\Program Files\OpenSSL'
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $ssl) { throw 'OpenSSL not found' }
+        Write-Host "Using OpenSSL at $ssl"
+
+        cmake -B build `
+          -G "Visual Studio 17 2022" -A x64 `
+          "-DOPENSSL_ROOT_DIR=$ssl"
+
+    # ── 5. Build ─────────────────────────────────────────────────────────────
+    - name: Build (Release)
+      run: cmake --build build --config Release --parallel
+      shell: pwsh
+
+    # ── 6. Stage files into dist\ ────────────────────────────────────────────
+    - name: Stage application
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force dist | Out-Null
+
+        # Main executables
+        Copy-Item 'build\Release\cryptograf-gui.exe' dist\
+        if (Test-Path 'build\Release\cryptograf.exe') {
+            Copy-Item 'build\Release\cryptograf.exe' dist\
+        }
+
+        # Qt DLLs and plugin subdirs (deployed by windeployqt6 at POST_BUILD)
+        Get-ChildItem 'build\Release\' -Filter '*.dll' |
+            Copy-Item -Destination dist\
+        foreach ($d in @('platforms','styles','iconengines','imageformats',
+                         'networkinformation','tls','generic')) {
+            if (Test-Path "build\Release\$d") {
+                Copy-Item "build\Release\$d" dist\ -Recurse -Force
+            }
+        }
+
+        # OpenSSL runtime DLLs
+        $sslBin = @(
+          'C:\Program Files\OpenSSL-Win64\bin',
+          'C:\OpenSSL-Win64\bin',
+          'C:\Program Files\OpenSSL\bin'
+        ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $sslBin) { throw 'OpenSSL bin dir not found' }
+        Get-ChildItem $sslBin -Filter 'libssl*.dll'    | Copy-Item -Destination dist\
+        Get-ChildItem $sslBin -Filter 'libcrypto*.dll' | Copy-Item -Destination dist\
+
+        Write-Host "`nStaged files:"
+        Get-ChildItem dist -Recurse | Select-Object -ExpandProperty FullName
+
+    # ── 7. NSIS installer ────────────────────────────────────────────────────
+    - name: Create installer
+      # Run from project root so "dist\" and "LICENSE" resolve correctly
+      run: makensis installer\cryptograf.nsi
+      shell: cmd
+
+    # ── 8. Artifacts ─────────────────────────────────────────────────────────
+    - name: Upload installer artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Cryptograf-Windows-Setup
+        path: Cryptograf-Setup.exe
+        if-no-files-found: error
+
+    # ── 9. GitHub Release (on version tag only) ───────────────────────────────
+    - name: Publish release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: Cryptograf-Setup.exe
+        generate_release_notes: true
