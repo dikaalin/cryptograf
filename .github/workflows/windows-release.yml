@@ -110,6 +110,14 @@ jobs:
         if (Test-Path LICENSE) { Write-Host "LICENSE exists" } else { Write-Host "LICENSE missing!" }
       shell: pwsh
 
+    - name: Upload dist for inspection (always)
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist-debug
+        path: dist/
+        if-no-files-found: warn
+
     - name: Create installer
       shell: pwsh
       run: |
