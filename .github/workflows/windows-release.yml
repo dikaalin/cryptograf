@@ -114,8 +114,9 @@ jobs:
       shell: pwsh
       run: |
         Write-Host "CWD: $(Get-Location)"
-        Write-Host "makensis: $((Get-Command makensis).Source)"
-        makensis /V4 installer\cryptograf.nsi
+        $nsis = (Get-Command makensis).Source
+        Write-Host "makensis: $nsis"
+        & $nsis /V4 /INPUTCHARSET UTF8 installer\cryptograf.nsi
         if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
 
     # ── 8. Artifacts ─────────────────────────────────────────────────────────
