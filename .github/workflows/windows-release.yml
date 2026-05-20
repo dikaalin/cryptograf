@@ -103,40 +103,13 @@ jobs:
         Get-ChildItem dist -Recurse | Select-Object -ExpandProperty FullName
 
     # ── 7. NSIS installer ────────────────────────────────────────────────────
-    - name: Ensure NSIS is available
-      run: |
-        if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
-          Write-Host "makensis not found — installing NSIS via choco"
-          choco install nsis --no-progress -y
-        } else {
-          Write-Host "makensis found: $((Get-Command makensis).Source)"
-        }
-      shell: pwsh
-
-    - name: Debug dist contents
-      run: |
-        Write-Host "=== dist\ ==="
-        if (Test-Path dist) { Get-ChildItem dist -Recurse | Select-Object FullName }
-        else { Write-Host "dist\ does not exist!" }
-        Write-Host "=== LICENSE ==="
-        if (Test-Path LICENSE) { Write-Host "LICENSE exists" } else { Write-Host "LICENSE missing!" }
-      shell: pwsh
-
-    - name: Upload dist for inspection (always)
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: dist-debug
-        path: dist/
-        if-no-files-found: warn
-
     - name: Create installer
       shell: pwsh
       run: |
-        Write-Host "CWD: $(Get-Location)"
-        $nsis = (Get-Command makensis).Source
-        Write-Host "makensis: $nsis"
-        & $nsis /V4 /INPUTCHARSET UTF8 installer\cryptograf.nsi
+        if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+          choco install nsis --no-progress -y
+        }
+        makensis installer\cryptograf.nsi
         if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
 
     # ── 8. Artifacts ─────────────────────────────────────────────────────────

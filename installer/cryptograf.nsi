@@ -19,24 +19,14 @@ InstallDirRegKey HKLM "Software\${APP_NAME}" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor    /SOLID lzma
 
-; ── Modern UI ─────────────────────────────────────────────────────────────────
-!include "MUI2.nsh"
+; ── Pages ─────────────────────────────────────────────────────────────────────
+Page license
+Page directory
+Page instfiles
+UninstPage uninstConfirm
+UninstPage instfiles
 
-!define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN      "$INSTDIR\${APP_EXE}"
-!define MUI_FINISHPAGE_RUN_TEXT "Запустить Cryptograf"
-
-!insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_LICENSE   "LICENSE"
-!insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
-
-!insertmacro MUI_UNPAGE_CONFIRM
-!insertmacro MUI_UNPAGE_INSTFILES
-
-!insertmacro MUI_LANGUAGE "Russian"
-!insertmacro MUI_LANGUAGE "English"
+LicenseData "LICENSE"
 
 ; ── Install ───────────────────────────────────────────────────────────────────
 Section "" SecMain
@@ -45,17 +35,17 @@ Section "" SecMain
     SetOutPath "$INSTDIR"
     ; Bundle everything from the staging directory (populated by stage.ps1 / CI):
     ;   cryptograf-gui.exe, cryptograf.exe
-    ;   Qt6*.dll, libssl*.dll, libcrypto*.dll
-    ;   platforms\, styles\, iconengines\, imageformats\, tls\, …
+    ;   Qt6*.dll, libssl*.dll, libcrypto*.dll, vcruntime*.dll
+    ;   platforms\, styles\, iconengines\, imageformats\, tls\, ...
     File /r "dist\*"
 
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-    ; Registry — Add/Remove Programs entry
+    ; Registry - Add/Remove Programs entry
     WriteRegStr   HKLM "Software\${APP_NAME}" \
                   "InstallDir" "$INSTDIR"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" \
-                  "DisplayName"     "Cryptograf — AES-256 шифрование файлов"
+                  "DisplayName"     "Cryptograf - AES-256 file encryption"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" \
                   "DisplayVersion"  "${APP_VERSION}"
     WriteRegStr   HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_GUID}" \
@@ -71,18 +61,18 @@ Section "" SecMain
 
     ; Start Menu + Desktop shortcuts
     CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-    CreateShortCut  "$SMPROGRAMS\${APP_NAME}\Cryptograf.lnk" \
+    CreateShortcut  "$SMPROGRAMS\${APP_NAME}\Cryptograf.lnk" \
                     "$INSTDIR\${APP_EXE}"
-    CreateShortCut  "$SMPROGRAMS\${APP_NAME}\Удалить Cryptograf.lnk" \
+    CreateShortcut  "$SMPROGRAMS\${APP_NAME}\Uninstall Cryptograf.lnk" \
                     "$INSTDIR\Uninstall.exe"
-    CreateShortCut  "$DESKTOP\Cryptograf.lnk" \
+    CreateShortcut  "$DESKTOP\Cryptograf.lnk" \
                     "$INSTDIR\${APP_EXE}"
 SectionEnd
 
 ; ── Uninstall ─────────────────────────────────────────────────────────────────
 Section "Uninstall"
     Delete "$SMPROGRAMS\${APP_NAME}\Cryptograf.lnk"
-    Delete "$SMPROGRAMS\${APP_NAME}\Удалить Cryptograf.lnk"
+    Delete "$SMPROGRAMS\${APP_NAME}\Uninstall Cryptograf.lnk"
     RMDir  "$SMPROGRAMS\${APP_NAME}"
     Delete "$DESKTOP\Cryptograf.lnk"
 
