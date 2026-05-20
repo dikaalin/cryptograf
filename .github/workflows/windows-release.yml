@@ -109,7 +109,12 @@ jobs:
         if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
           choco install nsis --no-progress -y
         }
-        makensis installer\cryptograf.nsi
+        $output = makensis /V4 installer\cryptograf.nsi 2>&1
+        # Write full NSIS output to job summary so it's visible without log access
+        "## NSIS output`n``````" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+        $output | Out-File $env:GITHUB_STEP_SUMMARY -Append
+        "``````" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+        $output | Write-Host
         if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE" }
 
     # ── 8. Artifacts ─────────────────────────────────────────────────────────
