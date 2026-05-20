@@ -87,6 +87,18 @@ jobs:
         Get-ChildItem $sslBin -Filter 'libssl*.dll'    | Copy-Item -Destination dist\
         Get-ChildItem $sslBin -Filter 'libcrypto*.dll' | Copy-Item -Destination dist\
 
+        # MSVC C++ runtime DLLs (so the app runs without VC++ Redistributable installed)
+        $crtPath = Get-Item 'C:\Program Files\Microsoft Visual Studio\2022\*\VC\Redist\MSVC\*\x64\Microsoft.VC143.CRT' |
+                   Sort-Object FullName | Select-Object -Last 1
+        if ($crtPath) {
+            foreach ($dll in @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll','msvcp140_2.dll')) {
+                $src = Join-Path $crtPath.FullName $dll
+                if (Test-Path $src) { Copy-Item $src dist\; Write-Host "Copied $dll" }
+            }
+        } else {
+            Write-Warning "MSVC CRT path not found — vcruntime DLLs will be missing"
+        }
+
         Write-Host "`nStaged files:"
         Get-ChildItem dist -Recurse | Select-Object -ExpandProperty FullName
 
