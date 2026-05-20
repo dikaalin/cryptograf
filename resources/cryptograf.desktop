@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Cryptograf
+Comment=AES-256 file encryption
+Exec=cryptograf-gui
+Icon=cryptograf
+Categories=Utility;Security;
+Terminal=false

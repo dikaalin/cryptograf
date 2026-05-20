@@ -9,8 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 find_package(OpenSSL 1.1 REQUIRED)
 
-# ── Qt automation (handles moc, rcc) ──────────────────────────────────────────
+# ── Qt automation (handles moc, rcc, uic) ────────────────────────────────────
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 # ── Compiler options ───────────────────────────────────────────────────────────
 if(MSVC)
@@ -40,10 +41,16 @@ if(WIN32)
 endif()
 
 # ── GUI tool ───────────────────────────────────────────────────────────────────
-qt_add_executable(cryptograf-gui
+set(GUI_SRCS
     src/gui_main.cpp
     ${CRYPTO_SRCS}
+    resources/icons.qrc
 )
+if(WIN32)
+    list(APPEND GUI_SRCS resources/app.rc)
+endif()
+
+qt_add_executable(cryptograf-gui ${GUI_SRCS})
 target_include_directories(cryptograf-gui PRIVATE src)
 target_link_libraries(cryptograf-gui PRIVATE Qt6::Widgets OpenSSL::SSL OpenSSL::Crypto)
 

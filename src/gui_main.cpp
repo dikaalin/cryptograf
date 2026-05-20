@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QIcon>
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
@@ -613,6 +614,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("Cryptograf");
     app.setApplicationDisplayName("Cryptograf — AES-256");
+    app.setWindowIcon(QIcon(":/cryptograf.png"));
     app.setStyle("Fusion");
     CryptografWindow w;
     w.show();
