@@ -20,13 +20,10 @@ RequestExecutionLevel admin
 SetCompressor    /SOLID lzma
 
 ; ── Pages ─────────────────────────────────────────────────────────────────────
-Page license
 Page directory
 Page instfiles
 UninstPage uninstConfirm
 UninstPage instfiles
-
-LicenseData "LICENSE"
 
 ; ── Install ───────────────────────────────────────────────────────────────────
 Section "" SecMain
