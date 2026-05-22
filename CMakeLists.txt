@@ -26,6 +26,7 @@ endif()
 set(CRYPTO_SRCS
     src/aes_cipher.cpp
     src/gcmsiv.cpp
+    src/digital_sign.cpp
 )
 
 # ── CLI tool ───────────────────────────────────────────────────────────────────

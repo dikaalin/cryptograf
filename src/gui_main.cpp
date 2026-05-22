@@ -31,6 +31,7 @@
 #include <functional>
 
 #include "aes_cipher.hpp"
+#include "digital_sign.hpp"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QLineEdit that accepts dropped file paths
@@ -287,8 +288,8 @@ class CryptografWindow : public QMainWindow {
 
         // ── Input form ───────────────────────────────────────────────────────
         auto* form = new QFormLayout;
-        form->setSpacing(10);
-        form->setContentsMargins(20, 14, 20, 10);
+        form->setSpacing(7);
+        form->setContentsMargins(12, 8, 12, 6);
         form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
         vlay->addLayout(form);
@@ -324,7 +325,7 @@ class CryptografWindow : public QMainWindow {
         // Encrypt button
         auto* btn = new QPushButton("  Зашифровать");
         btn->setObjectName("opBtn");
-        btn->setMinimumHeight(38);
+        btn->setMinimumHeight(34);
         btn->setStyleSheet(
             "QPushButton          { background:#2563eb; color:white; border-radius:6px;"
             "                       font-weight:bold; font-size:14px; }"
@@ -336,8 +337,8 @@ class CryptografWindow : public QMainWindow {
         auto* resultBox = new QGroupBox("Результат шифрования");
         resultBox->setVisible(false);
         auto* rform = new QFormLayout(resultBox);
-        rform->setSpacing(8);
-        rform->setContentsMargins(14, 10, 14, 10);
+        rform->setSpacing(6);
+        rform->setContentsMargins(10, 6, 10, 6);
         rform->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
         rform->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
@@ -446,8 +447,8 @@ class CryptografWindow : public QMainWindow {
     QWidget* makeDecryptTab() {
         auto* tab  = new QWidget;
         auto* form = new QFormLayout(tab);
-        form->setSpacing(10);
-        form->setContentsMargins(20, 16, 20, 16);
+        form->setSpacing(7);
+        form->setContentsMargins(12, 8, 12, 8);
         form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
         form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
@@ -469,7 +470,7 @@ class CryptografWindow : public QMainWindow {
 
         auto* btn = new QPushButton("  Расшифровать");
         btn->setObjectName("opBtn");
-        btn->setMinimumHeight(38);
+        btn->setMinimumHeight(34);
         btn->setStyleSheet(
             "QPushButton          { background:#16a34a; color:white; border-radius:6px;"
             "                       font-weight:bold; font-size:14px; }"
@@ -522,12 +523,188 @@ class CryptografWindow : public QMainWindow {
         return tab;
     }
 
+    // ─── Sign tab ───────────────────────────────────────────────────────────
+    QWidget* makeSignTab() {
+        auto* scroll = new QScrollArea;
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+
+        auto* tab  = new QWidget;
+        auto* vlay = new QVBoxLayout(tab);
+        vlay->setContentsMargins(10, 8, 10, 8);
+        vlay->setSpacing(8);
+        scroll->setWidget(tab);
+
+        // ── 1. Key generation ────────────────────────────────────────────────
+        auto* keyBox  = new QGroupBox("Генерация ключевой пары (ECDSA P-256)");
+        auto* keyForm = new QFormLayout(keyBox);
+        keyForm->setSpacing(7);
+        keyForm->setContentsMargins(10, 6, 10, 6);
+        keyForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        keyForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+        DropEdit *privEdit, *pubEdit;
+        keyForm->addRow("Закрытый ключ:", makeFileRow(privEdit, false, tab));
+        keyForm->addRow("Открытый ключ:", makeFileRow(pubEdit,  false, tab));
+
+        auto* keyBtn = new QPushButton("  Сгенерировать");
+        keyBtn->setObjectName("opBtn");
+        keyBtn->setMinimumHeight(34);
+        keyBtn->setStyleSheet(
+            "QPushButton          { background:#7c3aed; color:white; border-radius:6px;"
+            "                       font-weight:bold; font-size:13px; }"
+            "QPushButton:hover    { background:#6d28d9; }"
+            "QPushButton:disabled { background:#c4b5fd; color:#ede9fe; }");
+        keyForm->addRow("", keyBtn);
+        vlay->addWidget(keyBox);
+
+        connect(keyBtn, &QPushButton::clicked, this, [=, this]() {
+            const QString priv = privEdit->text().trimmed();
+            const QString pub  = pubEdit->text().trimmed();
+            if (priv.isEmpty()) { QMessageBox::warning(this, "Ошибка", "Укажите путь для закрытого ключа."); return; }
+            if (pub.isEmpty())  { QMessageBox::warning(this, "Ошибка", "Укажите путь для открытого ключа."); return; }
+            setBusy(true);
+            logMsg(QString("Генерация ключей ECDSA P-256…"));
+            work_ = new Worker;
+            work_->task = [p = priv.toStdString(), q = pub.toStdString()]() {
+                crypto::generate_ec_keypair(p, q);
+            };
+            connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                setBusy(false);
+                if (ok) logMsg("✓ Ключи сохранены: " + priv + " / " + pub);
+                else  { logMsg("✗ " + err); QMessageBox::critical(this, "Ошибка", err); }
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+            work_->start();
+        });
+
+        // ── 2. Sign ──────────────────────────────────────────────────────────
+        auto* signBox  = new QGroupBox("Подписать файл");
+        auto* signForm = new QFormLayout(signBox);
+        signForm->setSpacing(7);
+        signForm->setContentsMargins(10, 6, 10, 6);
+        signForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        signForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+        DropEdit *sInEdit, *sKeyEdit, *sSigEdit;
+        signForm->addRow("Файл:",           makeFileRow(sInEdit,  true,  tab));
+        signForm->addRow("Закрытый ключ:", makeFileRow(sKeyEdit, true,  tab));
+        signForm->addRow("Файл подписи:",  makeFileRow(sSigEdit, false, tab));
+
+        connect(sInEdit, &QLineEdit::textChanged, [sSigEdit](const QString& t) {
+            if (sSigEdit->text().isEmpty() && !t.isEmpty())
+                sSigEdit->setText(t + ".sig");
+        });
+
+        auto* signBtn = new QPushButton("  Подписать");
+        signBtn->setObjectName("opBtn");
+        signBtn->setMinimumHeight(34);
+        signBtn->setStyleSheet(
+            "QPushButton          { background:#0369a1; color:white; border-radius:6px;"
+            "                       font-weight:bold; font-size:13px; }"
+            "QPushButton:hover    { background:#075985; }"
+            "QPushButton:disabled { background:#7dd3fc; color:#e0f2fe; }");
+        signForm->addRow("", signBtn);
+        vlay->addWidget(signBox);
+
+        connect(signBtn, &QPushButton::clicked, this, [=, this]() {
+            const QString in  = sInEdit->text().trimmed();
+            const QString key = sKeyEdit->text().trimmed();
+            const QString sig = sSigEdit->text().trimmed();
+            if (in.isEmpty())          { QMessageBox::warning(this, "Ошибка", "Укажите подписываемый файл.");   return; }
+            if (key.isEmpty())         { QMessageBox::warning(this, "Ошибка", "Укажите файл закрытого ключа."); return; }
+            if (sig.isEmpty())         { QMessageBox::warning(this, "Ошибка", "Укажите путь для подписи.");     return; }
+            if (!QFile::exists(in))    { QMessageBox::warning(this, "Ошибка", "Файл не найден.");               return; }
+            if (!QFile::exists(key))   { QMessageBox::warning(this, "Ошибка", "Ключ не найден.");               return; }
+            setBusy(true);
+            logMsg("Подпись файла: " + in);
+            work_ = new Worker;
+            work_->task = [i = in.toStdString(), k = key.toStdString(), s = sig.toStdString()]() {
+                crypto::sign_file(i, k, s);
+            };
+            connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                setBusy(false);
+                if (ok) logMsg("✓ Подпись записана: " + sig);
+                else  { logMsg("✗ " + err); QMessageBox::critical(this, "Ошибка подписи", err); }
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+            work_->start();
+        });
+
+        // ── 3. Verify ────────────────────────────────────────────────────────
+        auto* verBox  = new QGroupBox("Проверить подпись");
+        auto* verForm = new QFormLayout(verBox);
+        verForm->setSpacing(7);
+        verForm->setContentsMargins(10, 6, 10, 6);
+        verForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        verForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+        DropEdit *vInEdit, *vSigEdit, *vKeyEdit;
+        verForm->addRow("Файл:",           makeFileRow(vInEdit,  true, tab));
+        verForm->addRow("Файл подписи:",  makeFileRow(vSigEdit, true, tab));
+        verForm->addRow("Открытый ключ:", makeFileRow(vKeyEdit, true, tab));
+
+        auto* verBtn = new QPushButton("  Проверить");
+        verBtn->setObjectName("opBtn");
+        verBtn->setMinimumHeight(34);
+        verBtn->setStyleSheet(
+            "QPushButton          { background:#16a34a; color:white; border-radius:6px;"
+            "                       font-weight:bold; font-size:13px; }"
+            "QPushButton:hover    { background:#15803d; }"
+            "QPushButton:disabled { background:#86efac; color:#dcfce7; }");
+        verForm->addRow("", verBtn);
+        vlay->addWidget(verBox);
+        vlay->addStretch(1);
+
+        connect(verBtn, &QPushButton::clicked, this, [=, this]() {
+            const QString in  = vInEdit->text().trimmed();
+            const QString sig = vSigEdit->text().trimmed();
+            const QString key = vKeyEdit->text().trimmed();
+            if (in.isEmpty())        { QMessageBox::warning(this, "Ошибка", "Укажите проверяемый файл.");   return; }
+            if (sig.isEmpty())       { QMessageBox::warning(this, "Ошибка", "Укажите файл подписи.");       return; }
+            if (key.isEmpty())       { QMessageBox::warning(this, "Ошибка", "Укажите файл открытого ключа."); return; }
+            if (!QFile::exists(in))  { QMessageBox::warning(this, "Ошибка", "Файл не найден.");             return; }
+            if (!QFile::exists(sig)) { QMessageBox::warning(this, "Ошибка", "Файл подписи не найден.");     return; }
+            if (!QFile::exists(key)) { QMessageBox::warning(this, "Ошибка", "Ключ не найден.");             return; }
+            setBusy(true);
+            logMsg("Проверка подписи: " + in);
+            work_ = new Worker;
+            bool* result = new bool(false);
+            work_->task = [i = in.toStdString(), s = sig.toStdString(),
+                           k = key.toStdString(), result]() {
+                *result = crypto::verify_file(i, s, k);
+            };
+            connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                setBusy(false);
+                if (ok) {
+                    if (*result) {
+                        logMsg("✓ Подпись ВЕРНА. Файл не изменён.");
+                        QMessageBox::information(this, "Результат проверки",
+                            "Подпись верна.\nФайл не был изменён после подписания.");
+                    } else {
+                        logMsg("✗ Подпись НЕДЕЙСТВИТЕЛЬНА. Файл изменён или ключ неверен.");
+                        QMessageBox::critical(this, "Результат проверки",
+                            "Подпись недействительна!\nФайл мог быть изменён, или используется другой ключ.");
+                    }
+                } else {
+                    logMsg("✗ " + err);
+                    QMessageBox::critical(this, "Ошибка проверки", err);
+                }
+                delete result;
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+            work_->start();
+        });
+
+        return scroll;
+    }
+
     // ─── Info tab ───────────────────────────────────────────────────────────
     QWidget* makeInfoTab() {
         auto* tab  = new QWidget;
         auto* vlay = new QVBoxLayout(tab);
-        vlay->setContentsMargins(20, 16, 20, 16);
-        vlay->setSpacing(10);
+        vlay->setContentsMargins(12, 8, 12, 8);
+        vlay->setSpacing(6);
 
         auto* row       = new QWidget;
         auto* h         = new QHBoxLayout(row);
@@ -568,28 +745,29 @@ class CryptografWindow : public QMainWindow {
 public:
     explicit CryptografWindow(QWidget* parent = nullptr) : QMainWindow(parent) {
         setWindowTitle("Cryptograf — AES-256 шифрование файлов");
-        resize(740, 600);
-        setMinimumSize(560, 480);
+        resize(700, 520);
+        setMinimumSize(520, 420);
 
         auto* central = new QWidget;
         setCentralWidget(central);
         auto* vlay = new QVBoxLayout(central);
-        vlay->setContentsMargins(8, 8, 8, 8);
-        vlay->setSpacing(6);
+        vlay->setContentsMargins(6, 6, 6, 4);
+        vlay->setSpacing(4);
 
         auto* tabs = new QTabWidget;
         tabs->setDocumentMode(true);
-        tabs->addTab(makeEncryptTab(), "  Шифровать  ");
-        tabs->addTab(makeDecryptTab(), "  Расшифровать  ");
-        tabs->addTab(makeInfoTab(),    "  Информация  ");
+        tabs->addTab(makeEncryptTab(), " Шифровать ");
+        tabs->addTab(makeDecryptTab(), " Расшифровать ");
+        tabs->addTab(makeSignTab(),    " Подпись ");
+        tabs->addTab(makeInfoTab(),    " Информация ");
         vlay->addWidget(tabs, 1);
 
         auto* logGroup = new QGroupBox("Журнал");
         auto* logLay   = new QVBoxLayout(logGroup);
-        logLay->setContentsMargins(6, 4, 6, 4);
+        logLay->setContentsMargins(4, 2, 4, 2);
         log_ = new QPlainTextEdit;
         log_->setReadOnly(true);
-        log_->setMaximumHeight(90);
+        log_->setMaximumHeight(72);
         log_->setFont(monoFont(9));
         log_->setStyleSheet(
             "QPlainTextEdit { background:#1e1e1e; color:#d4d4d4; border:none; }");
