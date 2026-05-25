@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 580 390" xmlns="http://www.w3.org/2000/svg" font-family="Inter,system-ui,sans-serif">
+<defs>
+  <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+    <path d="M0,0 L8,3.5 L0,7 Z" fill="#94a3b8"/>
+  </marker>
+  <marker id="arrG" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+    <path d="M0,0 L8,3.5 L0,7 Z" fill="#16a34a"/>
+  </marker>
+  <marker id="arrR" markerWidth="8" markerHeight="8" refX="7" refY="3.5" orient="auto">
+    <path d="M0,0 L8,3.5 L0,7 Z" fill="#dc2626"/>
+  </marker>
+  <filter id="shadow">
+    <feDropShadow dx="0" dy="1" stdDeviation="2" flood-color="#00000018"/>
+  </filter>
+</defs>
+
+<!-- ── DECRYPTION PIPELINE ── -->
+<text x="16" y="20" font-size="9" fill="#94a3b8" font-weight="700" letter-spacing="1.2">КОНВЕЙЕР РАСШИФРОВАНИЯ</text>
+
+<!-- .enc file -->
+<rect x="16" y="28" width="80" height="54" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="56" y="49" font-size="8.5" fill="#94a3b8" text-anchor="middle">Входной</text>
+<text x="56" y="63" font-size="13" fill="#1e293b" text-anchor="middle" font-weight="700">.enc</text>
+<text x="56" y="76" font-size="7.5" fill="#94a3b8" text-anchor="middle">файл</text>
+<line x1="96" y1="55" x2="118" y2="55" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+<!-- Parse header -->
+<rect x="119" y="28" width="102" height="54" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="170" y="47" font-size="9" fill="#4f46e5" text-anchor="middle" font-weight="700">Разбор</text>
+<text x="170" y="59" font-size="9" fill="#4f46e5" text-anchor="middle" font-weight="700">заголовка</text>
+<text x="170" y="71" font-size="7.5" fill="#818cf8" text-anchor="middle">magic·mode·salt·iv</text>
+<line x1="221" y1="55" x2="243" y2="55" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+<!-- PBKDF2 -->
+<rect x="244" y="28" width="96" height="54" rx="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="292" y="47" font-size="9.5" fill="#4f46e5" text-anchor="middle" font-weight="700">PBKDF2</text>
+<text x="292" y="60" font-size="8" fill="#6366f1" text-anchor="middle">пароль + salt</text>
+<text x="292" y="73" font-size="8" fill="#818cf8" text-anchor="middle">→ 64 байта</text>
+<line x1="340" y1="55" x2="362" y2="55" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+<!-- AES Decrypt -->
+<rect x="363" y="28" width="92" height="54" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="409" y="47" font-size="9.5" fill="#e2e8f0" text-anchor="middle" font-weight="700">AES-256</text>
+<text x="409" y="60" font-size="9" fill="#94a3b8" text-anchor="middle">Decrypt</text>
+<text x="409" y="73" font-size="7.5" fill="#475569" text-anchor="middle">+ verify tag</text>
+<line x1="455" y1="55" x2="477" y2="55" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+<!-- Output file -->
+<rect x="478" y="28" width="86" height="54" rx="8" fill="white" stroke="#16a34a" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="521" y="49" font-size="8.5" fill="#16a34a" text-anchor="middle">Выходной</text>
+<text x="521" y="63" font-size="13" fill="#1e293b" text-anchor="middle" font-weight="700">Файл</text>
+<text x="521" y="76" font-size="7.5" fill="#16a34a" text-anchor="middle">plaintext</text>
+
+<!-- ── VERIFICATION ── -->
+<text x="16" y="104" font-size="9" fill="#94a3b8" font-weight="700" letter-spacing="1.2">ПРОВЕРКА ПОДЛИННОСТИ</text>
+
+<!-- AEAD -->
+<rect x="16" y="112" width="268" height="76" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="16" y="112" width="268" height="22" rx="8" fill="#16a34a"/>
+<rect x="16" y="122" width="268" height="12" fill="#16a34a"/>
+<text x="150" y="127" font-size="9.5" fill="white" text-anchor="middle" font-weight="700">AEAD — встроенная проверка</text>
+<text x="30" y="146" font-size="8.5" fill="#166534">●  GCM: GHASH (AAD + ciphertext)</text>
+<text x="30" y="161" font-size="8.5" fill="#166534">●  CCM: CBC-MAC до расшифровки</text>
+<text x="30" y="176" font-size="8.5" fill="#166534">●  SIV / GCM-SIV: устойчив к повтору nonce</text>
+
+<!-- Non-AEAD -->
+<rect x="296" y="112" width="268" height="76" rx="8" fill="#fff7ed" stroke="#d97706" stroke-width="1.5" filter="url(#shadow)"/>
+<rect x="296" y="112" width="268" height="22" rx="8" fill="#d97706"/>
+<rect x="296" y="122" width="268" height="12" fill="#d97706"/>
+<text x="430" y="127" font-size="9.5" fill="white" text-anchor="middle" font-weight="700">Non-AEAD — HMAC-SHA256</text>
+<text x="312" y="146" font-size="8.5" fill="#92400e">●  HMAC(mac_key,  header ‖ ciphertext)</text>
+<text x="312" y="161" font-size="8.5" fill="#92400e">●  Сравнить тег (32B) в конце файла</text>
+<text x="312" y="176" font-size="8.5" fill="#92400e">●  Constant-time compare → ошибка</text>
+
+<!-- ── DECISION FORK ── -->
+<text x="16" y="210" font-size="9" fill="#94a3b8" font-weight="700" letter-spacing="1.2">РЕЗУЛЬТАТ ПРОВЕРКИ</text>
+
+<!-- AES decrypt node -->
+<rect x="225" y="220" width="130" height="44" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="290" y="238" font-size="9.5" fill="#e2e8f0" text-anchor="middle" font-weight="700">AES-256 Decrypt</text>
+<text x="290" y="252" font-size="7.5" fill="#64748b" text-anchor="middle">verify authentication tag</text>
+
+<!-- Arrow to valid -->
+<line x1="225" y1="234" x2="168" y2="268" stroke="#16a34a" stroke-width="1.5" marker-end="url(#arrG)"/>
+<!-- Arrow to invalid -->
+<line x1="355" y1="234" x2="412" y2="268" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrR)"/>
+
+<!-- Valid -->
+<rect x="68" y="270" width="148" height="52" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="142" y="291" font-size="22" fill="#16a34a" text-anchor="middle">✓</text>
+<text x="142" y="309" font-size="9" fill="#16a34a" text-anchor="middle" font-weight="700">Тег верен — файл записан</text>
+
+<!-- Invalid -->
+<rect x="364" y="270" width="148" height="52" rx="8" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5" filter="url(#shadow)"/>
+<text x="438" y="291" font-size="22" fill="#dc2626" text-anchor="middle">✗</text>
+<text x="438" y="309" font-size="9" fill="#dc2626" text-anchor="middle" font-weight="700">Тег не совпал — ошибка</text>
+
+<!-- ── HEADER MAP ── -->
+<text x="16" y="346" font-size="9" fill="#94a3b8" font-weight="700" letter-spacing="1.2">БАЙТОВАЯ КАРТА ЗАГОЛОВКА  (37 байт)</text>
+
+<rect x="16" y="354" width="548" height="28" rx="6" fill="white" stroke="#e2e8f0" stroke-width="1"/>
+<rect x="16" y="354" width="42" height="28" rx="6" fill="#4f46e5"/>
+<text x="37" y="372" font-size="8" fill="white" text-anchor="middle" font-weight="700">AES·4B</text>
+<rect x="59" y="354" width="24" height="28" fill="#7c3aed"/>
+<text x="71" y="372" font-size="8" fill="white" text-anchor="middle" font-weight="700">m·1B</text>
+<rect x="84" y="354" width="110" height="28" fill="#0369a1"/>
+<text x="139" y="372" font-size="8" fill="white" text-anchor="middle" font-weight="700">salt  16B  off 5</text>
+<rect x="195" y="354" width="110" height="28" fill="#0284c7"/>
+<text x="250" y="372" font-size="8" fill="white" text-anchor="middle" font-weight="700">iv / nonce  16B  off 21</text>
+<rect x="306" y="354" width="196" height="28" fill="#334155"/>
+<text x="404" y="372" font-size="8" fill="#94a3b8" text-anchor="middle" font-weight="700">ciphertext  N байт  off 37</text>
+<rect x="503" y="354" width="61" height="28" rx="6" fill="#b45309"/>
+<text x="534" y="372" font-size="8" fill="white" text-anchor="middle" font-weight="700">tag 16/32B</text>
+</svg>
