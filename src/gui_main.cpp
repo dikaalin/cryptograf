@@ -244,9 +244,10 @@ QString buildFileInfo(const QString& path) {
 }
 
 
-// Wrap a diagram widget in the dot-grid background pane
-QWidget* wrapDiagram(QWidget* diagram, QWidget* parent) {
+// Wrap a diagram widget in the dot-grid background pane (forward-declared; defined inside class)
+static QWidget* wrapDiagram(QWidget* diagram, QWidget* parent, QList<DotGridWidget*>* reg = nullptr) {
     auto* bg   = new DotGridWidget(parent);
+    if (reg) reg->append(bg);
     auto* vlay = new QVBoxLayout(bg);
     vlay->setContentsMargins(14, 14, 14, 14);
 
@@ -486,10 +487,11 @@ QProgressBar::chunk { background: #7aa2f7; border-radius: 5px; }
 class CryptografWindow : public QMainWindow {
     Q_OBJECT
 
-    QPlainTextEdit* log_       = nullptr;
-    Worker*         work_      = nullptr;
-    QComboBox*      encModeCb_ = nullptr;   // sync with Settings default
-    bool            darkMode_  = false;
+    QPlainTextEdit*        log_       = nullptr;
+    Worker*                work_      = nullptr;
+    QComboBox*             encModeCb_ = nullptr;   // sync with Settings default
+    bool                   darkMode_  = false;
+    QList<DotGridWidget*>  diagrams_;              // all dot-grid backgrounds
 
     void logMsg(const QString& msg) {
         const auto ts = QDateTime::currentDateTime().toString("hh:mm:ss");
@@ -505,7 +507,7 @@ class CryptografWindow : public QMainWindow {
     void applyTheme(bool dark) {
         darkMode_ = dark;
         setStyleSheet(dark ? DARK_STYLE : APP_STYLE);
-        for (auto* w : findChildren<DotGridWidget*>()) w->setDark(dark);
+        for (auto* w : diagrams_) w->setDark(dark);
         QSettings("Cryptograf","Cryptograf").setValue("darkMode", dark);
     }
 
@@ -771,7 +773,7 @@ class CryptografWindow : public QMainWindow {
         diagram->setMode(MODES[4].mode); // CTR default
 
         splitter->addWidget(formPane);
-        splitter->addWidget(wrapDiagram(diagram, splitter));
+        splitter->addWidget(wrapDiagram(diagram, splitter, &diagrams_));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
@@ -907,7 +909,7 @@ class CryptografWindow : public QMainWindow {
         });
 
         splitter->addWidget(formPane);
-        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/decrypt.svg"), splitter));
+        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/decrypt.svg"), splitter, &diagrams_));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
@@ -1054,7 +1056,7 @@ class CryptografWindow : public QMainWindow {
         });
 
         splitter->addWidget(formPane);
-        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/sign.svg"), splitter));
+        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/sign.svg"), splitter, &diagrams_));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
@@ -1109,7 +1111,7 @@ class CryptografWindow : public QMainWindow {
         });
 
         splitter->addWidget(formPane);
-        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/info.svg"), splitter));
+        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/info.svg"), splitter, &diagrams_));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
