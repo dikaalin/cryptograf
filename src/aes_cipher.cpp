@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -11,6 +12,16 @@
 #include <openssl/evp.h>
 #include <openssl/params.h>   // OSSL_PARAM
 #include <openssl/rand.h>
+
+// On Windows, std::ifstream/ofstream use ANSI (system code page), not UTF-8.
+// std::filesystem::path(std::u8string) converts UTF-8 → UTF-16 on Windows.
+static std::filesystem::path to_fs_path(const std::string& utf8) {
+#ifdef _WIN32
+    return std::filesystem::path(std::u8string(utf8.begin(), utf8.end()));
+#else
+    return std::filesystem::path(utf8);
+#endif
+}
 
 namespace crypto {
 
@@ -577,10 +588,10 @@ void encrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
                   Mode               mode) {
-    std::ifstream in(in_path, std::ios::binary);
+    std::ifstream in(to_fs_path(in_path), std::ios::binary);
     if (!in) throw std::runtime_error("Cannot open input file: " + in_path);
 
-    std::ofstream out(out_path, std::ios::binary);
+    std::ofstream out(to_fs_path(out_path), std::ios::binary);
     if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
 
     const Salt salt = random_salt();
@@ -620,7 +631,7 @@ void encrypt_file(const std::string& in_path,
 void decrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password) {
-    std::ifstream f(in_path, std::ios::binary);
+    std::ifstream f(to_fs_path(in_path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
 
     uint8_t raw_hdr[sizeof(FileHeader)];
@@ -652,7 +663,7 @@ void decrypt_file(const std::string& in_path,
 
     const auto keys = derive_keys(password, salt);
 
-    std::ofstream out(out_path, std::ios::binary);
+    std::ofstream out(to_fs_path(out_path), std::ios::binary);
     if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
 
     if (mode_is_aead(mode))
