@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <vector>
 
+namespace fs = std::filesystem;
+
 #include <openssl/crypto.h>   // CRYPTO_memcmp
 #include <openssl/evp.h>
 #include <openssl/params.h>   // OSSL_PARAM
@@ -245,7 +247,8 @@ static std::vector<uint8_t> read_all(std::ifstream& in) {
 static void encrypt_non_aead(std::ifstream& in, std::ofstream& out,
                               const DerivedKeys& keys,
                               const uint8_t* raw_hdr, size_t hdr_size,
-                              Mode mode, const IV& iv) {
+                              Mode mode, const IV& iv,
+                              int64_t total, const ProgressFn& fn) {
     CipherRef cipher = make_cipher(mode);
     HmacCtx   hmac(keys.mac.data(), HMAC_KEY_LEN);
     hmac.update(raw_hdr, hdr_size);
@@ -259,6 +262,7 @@ static void encrypt_non_aead(std::ifstream& in, std::ofstream& out,
     static constexpr size_t CHUNK = 65536;
     std::vector<uint8_t> ibuf(CHUNK), obuf(CHUNK + EVP_MAX_BLOCK_LENGTH);
     int len = 0;
+    int64_t done = 0;
 
     while (in) {
         in.read(reinterpret_cast<char*>(ibuf.data()), CHUNK);
@@ -268,6 +272,8 @@ static void encrypt_non_aead(std::ifstream& in, std::ofstream& out,
             throw std::runtime_error("EVP_EncryptUpdate failed");
         out.write(reinterpret_cast<const char*>(obuf.data()), len);
         hmac.update(obuf.data(), static_cast<size_t>(len));
+        done += n;
+        if (fn && total > 0) fn(done, total);
     }
 
     if (EVP_EncryptFinal_ex(aes.ctx, obuf.data(), &len) != 1)
@@ -278,6 +284,7 @@ static void encrypt_non_aead(std::ifstream& in, std::ofstream& out,
     const HMACTag tag = hmac.finalize();
     out.write(reinterpret_cast<const char*>(tag.data()),
               static_cast<std::streamsize>(tag.size()));
+    if (fn && total > 0) fn(total, total);
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +299,8 @@ static void encrypt_non_aead(std::ifstream& in, std::ofstream& out,
 // ---------------------------------------------------------------------------
 
 static void encrypt_aead(std::ifstream& in, std::ofstream& out,
-                         const DerivedKeys& keys, Mode mode, const IV& iv) {
+                         const DerivedKeys& keys, Mode mode, const IV& iv,
+                         int64_t total, const ProgressFn& fn) {
     // GCM-SIV: RFC 8452 manual implementation (nonce = first 12 bytes of iv)
     if (mode == Mode::GCM_SIV) {
         auto pt     = read_all(in);
@@ -301,6 +309,7 @@ static void encrypt_aead(std::ifstream& in, std::ofstream& out,
                                       pt.data(), pt.size());
         out.write(reinterpret_cast<const char*>(result.data()),
                   static_cast<std::streamsize>(result.size()));
+        if (fn && total > 0) fn(total, total);
         return;
     }
 
@@ -345,11 +354,13 @@ static void encrypt_aead(std::ifstream& in, std::ofstream& out,
         int flen = 0;
         EVP_EncryptFinal_ex(ctx.ctx, ct.data() + len, &flen);
         out.write(reinterpret_cast<const char*>(ct.data()), len + flen);
+        if (fn && total > 0) fn(total, total);
     } else {
-        // GCM / GCM-SIV / SIV: stream in chunks
+        // GCM / SIV: stream in chunks
         static constexpr size_t CHUNK = 65536;
         std::vector<uint8_t> ibuf(CHUNK), obuf(CHUNK + EVP_MAX_BLOCK_LENGTH);
         int len = 0;
+        int64_t done = 0;
 
         while (in) {
             in.read(reinterpret_cast<char*>(ibuf.data()), CHUNK);
@@ -358,11 +369,14 @@ static void encrypt_aead(std::ifstream& in, std::ofstream& out,
             if (EVP_EncryptUpdate(ctx.ctx, obuf.data(), &len, ibuf.data(), n) != 1)
                 throw std::runtime_error("EVP_EncryptUpdate (AEAD) failed");
             out.write(reinterpret_cast<const char*>(obuf.data()), len);
+            done += n;
+            if (fn && total > 0) fn(done, total);
         }
 
         if (EVP_EncryptFinal_ex(ctx.ctx, obuf.data(), &len) != 1)
             throw std::runtime_error("EVP_EncryptFinal_ex (AEAD) failed");
         out.write(reinterpret_cast<const char*>(obuf.data()), len);
+        if (fn && total > 0) fn(total, total);
     }
 
     // Retrieve and append the 16-byte authentication tag
@@ -381,7 +395,10 @@ static void encrypt_aead(std::ifstream& in, std::ofstream& out,
 static void decrypt_non_aead(std::ifstream& f, std::ofstream& out,
                               const uint8_t* raw_hdr, size_t hdr_size,
                               const DerivedKeys& keys, Mode mode, const IV& iv,
-                              size_t cipher_size) {
+                              size_t cipher_size, const ProgressFn& fn) {
+    // Progress: pass1 HMAC = 0..50%, pass2 decrypt = 50..100%
+    const int64_t total2 = static_cast<int64_t>(cipher_size) * 2;
+
     // --- Pass 1: HMAC verification ---
     HMACTag stored_tag{};
     f.seekg(-static_cast<std::streamoff>(HMAC_TAG_LEN), std::ios::end);
@@ -395,13 +412,16 @@ static void decrypt_non_aead(std::ifstream& f, std::ofstream& out,
         static constexpr size_t CHUNK = 65536;
         std::vector<uint8_t> buf(CHUNK);
         size_t rem = cipher_size;
+        int64_t done = 0;
         while (rem > 0) {
             size_t n = std::min(rem, CHUNK);
             f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(n));
             size_t got = static_cast<size_t>(f.gcount());
             if (got == 0) break;
             hmac.update(buf.data(), got);
-            rem -= got;
+            rem  -= got;
+            done += static_cast<int64_t>(got);
+            if (fn && total2 > 0) fn(done, total2);
         }
     }
 
@@ -423,6 +443,7 @@ static void decrypt_non_aead(std::ifstream& f, std::ofstream& out,
     std::vector<uint8_t> ibuf(CHUNK), obuf(CHUNK + EVP_MAX_BLOCK_LENGTH);
     int len = 0;
     size_t rem = cipher_size;
+    int64_t done2 = static_cast<int64_t>(cipher_size); // offset into 0..total2
 
     while (rem > 0) {
         size_t n = std::min(rem, CHUNK);
@@ -432,12 +453,15 @@ static void decrypt_non_aead(std::ifstream& f, std::ofstream& out,
         if (EVP_DecryptUpdate(aes.ctx, obuf.data(), &len, ibuf.data(), got) != 1)
             throw std::runtime_error("EVP_DecryptUpdate failed");
         out.write(reinterpret_cast<const char*>(obuf.data()), len);
-        rem -= static_cast<size_t>(got);
+        rem   -= static_cast<size_t>(got);
+        done2 += got;
+        if (fn && total2 > 0) fn(done2, total2);
     }
 
     if (EVP_DecryptFinal_ex(aes.ctx, obuf.data(), &len) != 1)
         throw std::runtime_error("EVP_DecryptFinal_ex failed (padding error)");
     out.write(reinterpret_cast<const char*>(obuf.data()), len);
+    if (fn && total2 > 0) fn(total2, total2);
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +484,9 @@ static void decrypt_non_aead(std::ifstream& f, std::ofstream& out,
 
 static void decrypt_aead(std::ifstream& f, std::ofstream& out,
                          const DerivedKeys& keys, Mode mode, const IV& iv,
-                         size_t cipher_size) {
+                         size_t cipher_size, const ProgressFn& fn) {
+    const int64_t total = static_cast<int64_t>(cipher_size);
+
     std::array<uint8_t, AES_TAG_LEN> tag{};
     f.seekg(-static_cast<std::streamoff>(AES_TAG_LEN), std::ios::end);
     f.read(reinterpret_cast<char*>(tag.data()), AES_TAG_LEN);
@@ -477,6 +503,7 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
                                    tag.data());
         out.write(reinterpret_cast<const char*>(pt.data()),
                   static_cast<std::streamsize>(pt.size()));
+        if (fn && total > 0) fn(total, total);
         return;
     }
 
@@ -511,6 +538,7 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
             throw std::runtime_error(
                 "AEAD (CCM) verification failed — file is tampered or password is wrong");
         out.write(reinterpret_cast<const char*>(pt.data()), len);
+        if (fn && total > 0) fn(total, total);
 
     } else if (mode == Mode::SIV) {
         // SIV: one-step init (cipher + key in the same call), then SET_TAG.
@@ -525,6 +553,7 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
         std::vector<uint8_t> ibuf(CHUNK), obuf(CHUNK + EVP_MAX_BLOCK_LENGTH);
         int len = 0;
         size_t rem = cipher_size;
+        int64_t done = 0;
 
         while (rem > 0) {
             size_t n = std::min(rem, CHUNK);
@@ -535,16 +564,19 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
                 throw std::runtime_error(
                     "AEAD (SIV) verification failed — file is tampered or password is wrong");
             out.write(reinterpret_cast<const char*>(obuf.data()), len);
-            rem -= static_cast<size_t>(got);
+            rem  -= static_cast<size_t>(got);
+            done += got;
+            if (fn && total > 0) fn(done, total);
         }
 
         if (EVP_DecryptFinal_ex(ctx.ctx, obuf.data(), &len) != 1)
             throw std::runtime_error(
                 "AEAD (SIV) verification failed — file is tampered or password is wrong");
         out.write(reinterpret_cast<const char*>(obuf.data()), len);
+        if (fn && total > 0) fn(total, total);
 
     } else {
-        // GCM / GCM-SIV: two-step init, stream ciphertext, SET_TAG before Final.
+        // GCM: two-step init, stream ciphertext, SET_TAG before Final.
         EVP_DecryptInit_ex(ctx.ctx, cipher.get(), nullptr, nullptr, nullptr);
 
         size_t nlen = nonce_len(mode);
@@ -558,6 +590,7 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
         std::vector<uint8_t> ibuf(CHUNK), obuf(CHUNK + EVP_MAX_BLOCK_LENGTH);
         int len = 0;
         size_t rem = cipher_size;
+        int64_t done = 0;
 
         while (rem > 0) {
             size_t n = std::min(rem, CHUNK);
@@ -567,16 +600,19 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
             if (EVP_DecryptUpdate(ctx.ctx, obuf.data(), &len, ibuf.data(), got) != 1)
                 throw std::runtime_error("EVP_DecryptUpdate (AEAD) failed");
             out.write(reinterpret_cast<const char*>(obuf.data()), len);
-            rem -= static_cast<size_t>(got);
+            rem  -= static_cast<size_t>(got);
+            done += got;
+            if (fn && total > 0) fn(done, total);
         }
 
-        // Set tag before Final — GCM/GCM-SIV verify at EVP_DecryptFinal_ex
+        // Set tag before Final — GCM verifies at EVP_DecryptFinal_ex
         EVP_CIPHER_CTX_ctrl(ctx.ctx, EVP_CTRL_AEAD_SET_TAG,
                              AES_TAG_LEN, tag.data());
         if (EVP_DecryptFinal_ex(ctx.ctx, obuf.data(), &len) != 1)
             throw std::runtime_error(
                 "AEAD verification failed — file is tampered or password is wrong");
         out.write(reinterpret_cast<const char*>(obuf.data()), len);
+        if (fn && total > 0) fn(total, total);
     }
 }
 
@@ -587,9 +623,14 @@ static void decrypt_aead(std::ifstream& f, std::ofstream& out,
 void encrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
-                  Mode               mode) {
+                  Mode               mode,
+                  ProgressFn         on_progress) {
     std::ifstream in(to_fs_path(in_path), std::ios::binary);
     if (!in) throw std::runtime_error("Cannot open input file: " + in_path);
+
+    in.seekg(0, std::ios::end);
+    const int64_t in_size = static_cast<int64_t>(in.tellg());
+    in.seekg(0);
 
     std::ofstream out(to_fs_path(out_path), std::ios::binary);
     if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
@@ -619,18 +660,19 @@ void encrypt_file(const std::string& in_path,
     if (!out) throw std::runtime_error("Write error on header");
 
     if (mode_is_aead(mode))
-        encrypt_aead(in, out, keys, mode, iv);
+        encrypt_aead(in, out, keys, mode, iv, in_size, on_progress);
     else
         encrypt_non_aead(in, out, keys,
                          reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr),
-                         mode, iv);
+                         mode, iv, in_size, on_progress);
 
     if (!out) throw std::runtime_error("Write error on output file");
 }
 
 void decrypt_file(const std::string& in_path,
                   const std::string& out_path,
-                  std::string_view   password) {
+                  std::string_view   password,
+                  ProgressFn         on_progress) {
     std::ifstream f(to_fs_path(in_path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
 
@@ -667,12 +709,342 @@ void decrypt_file(const std::string& in_path,
     if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
 
     if (mode_is_aead(mode))
-        decrypt_aead(f, out, keys, mode, iv, cipher_size);
+        decrypt_aead(f, out, keys, mode, iv, cipher_size, on_progress);
     else
         decrypt_non_aead(f, out, raw_hdr, sizeof(raw_hdr),
-                         keys, mode, iv, cipher_size);
+                         keys, mode, iv, cipher_size, on_progress);
 
     if (!out) throw std::runtime_error("Write error on output file");
+}
+
+// ---------------------------------------------------------------------------
+// CDIR archive format (folder encryption)
+//
+// [4]       magic  "CDIR"
+// [4]       file_count  (uint32_t, little-endian)
+// Per file:
+//   [2]     path_len  (uint16_t, little-endian) — relative UTF-8 path length
+//   [N]     relative path bytes
+//   [8]     file_size (uint64_t, little-endian)
+//   [M]     file data bytes
+// ---------------------------------------------------------------------------
+
+static void write_le32(std::vector<uint8_t>& buf, uint32_t v) {
+    buf.push_back(static_cast<uint8_t>(v));
+    buf.push_back(static_cast<uint8_t>(v >> 8));
+    buf.push_back(static_cast<uint8_t>(v >> 16));
+    buf.push_back(static_cast<uint8_t>(v >> 24));
+}
+
+static void write_le16(std::vector<uint8_t>& buf, uint16_t v) {
+    buf.push_back(static_cast<uint8_t>(v));
+    buf.push_back(static_cast<uint8_t>(v >> 8));
+}
+
+static void write_le64(std::vector<uint8_t>& buf, uint64_t v) {
+    for (int i = 0; i < 8; ++i) buf.push_back(static_cast<uint8_t>(v >> (i * 8)));
+}
+
+static uint32_t read_le32(const uint8_t* p) {
+    return static_cast<uint32_t>(p[0])
+         | static_cast<uint32_t>(p[1]) << 8
+         | static_cast<uint32_t>(p[2]) << 16
+         | static_cast<uint32_t>(p[3]) << 24;
+}
+
+static uint16_t read_le16(const uint8_t* p) {
+    return static_cast<uint16_t>(p[0]) | static_cast<uint16_t>(p[1]) << 8;
+}
+
+static uint64_t read_le64(const uint8_t* p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; ++i) v |= static_cast<uint64_t>(p[i]) << (i * 8);
+    return v;
+}
+
+// Collect all regular files under dir, return sorted (rel_path, abs_path) pairs.
+static std::vector<std::pair<std::string, fs::path>>
+collect_files(const fs::path& dir) {
+    std::vector<std::pair<std::string, fs::path>> files;
+    for (const auto& ent : fs::recursive_directory_iterator(dir)) {
+        if (!ent.is_regular_file()) continue;
+        auto rel = fs::relative(ent.path(), dir);
+        // Use forward-slash separators in the archive for portability
+        std::string rel_str = rel.generic_string();
+        files.emplace_back(std::move(rel_str), ent.path());
+    }
+    std::sort(files.begin(), files.end(),
+              [](const auto& a, const auto& b){ return a.first < b.first; });
+    return files;
+}
+
+// Pack dir into a CDIR byte blob.
+// on_progress(done, total) called with bytes packed vs. total_bytes.
+static std::vector<uint8_t>
+pack_cdir(const fs::path& dir, int64_t total_bytes, const ProgressFn& fn) {
+    auto files = collect_files(dir);
+
+    std::vector<uint8_t> buf;
+    buf.reserve(static_cast<size_t>(total_bytes) + 64);
+
+    // Magic + count
+    buf.insert(buf.end(), {'C','D','I','R'});
+    write_le32(buf, static_cast<uint32_t>(files.size()));
+
+    int64_t done = 0;
+    for (const auto& [rel, abs] : files) {
+        if (rel.size() > 0xFFFF)
+            throw std::runtime_error("Path too long (>65535): " + rel);
+
+        const uint64_t fsize = static_cast<uint64_t>(fs::file_size(abs));
+        write_le16(buf, static_cast<uint16_t>(rel.size()));
+        buf.insert(buf.end(), rel.begin(), rel.end());
+        write_le64(buf, fsize);
+
+        std::ifstream fin(abs, std::ios::binary);
+        if (!fin) throw std::runtime_error("Cannot open: " + abs.string());
+        char tmp[65536];
+        while (fin.read(tmp, sizeof(tmp)) || fin.gcount() > 0) {
+            buf.insert(buf.end(), tmp, tmp + fin.gcount());
+            done += fin.gcount();
+            if (fn && total_bytes > 0) fn(done, total_bytes);
+        }
+    }
+    return buf;
+}
+
+// Unpack a CDIR blob into out_dir. Rejects ".." and absolute paths.
+// on_progress(done, total) with bytes extracted vs. total cdir data.
+static void
+unpack_cdir(const uint8_t* data, size_t size,
+            const fs::path& out_dir, const ProgressFn& fn) {
+    if (size < 8 || std::memcmp(data, "CDIR", 4) != 0)
+        throw std::runtime_error("Not a valid CDIR archive");
+
+    const uint32_t count = read_le32(data + 4);
+    size_t pos = 8;
+    int64_t done = 0;
+    const int64_t total = static_cast<int64_t>(size);
+
+    fs::create_directories(out_dir);
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (pos + 2 > size) throw std::runtime_error("CDIR: truncated header");
+        const uint16_t path_len = read_le16(data + pos); pos += 2;
+        if (pos + path_len + 8 > size) throw std::runtime_error("CDIR: truncated path");
+
+        std::string rel(reinterpret_cast<const char*>(data + pos), path_len);
+        pos += path_len;
+
+        // Security: reject absolute paths and path traversal
+        if (rel.empty() || rel[0] == '/' || rel[0] == '\\')
+            throw std::runtime_error("CDIR: absolute path rejected: " + rel);
+        fs::path rel_path(rel);
+        for (const auto& part : rel_path) {
+            if (part == "..")
+                throw std::runtime_error("CDIR: path traversal rejected: " + rel);
+        }
+
+        const uint64_t fsize = read_le64(data + pos); pos += 8;
+        if (pos + fsize > size) throw std::runtime_error("CDIR: truncated file data");
+
+        const fs::path out_path = out_dir / rel_path;
+        fs::create_directories(out_path.parent_path());
+
+        std::ofstream fout(out_path, std::ios::binary);
+        if (!fout) throw std::runtime_error("Cannot create: " + out_path.string());
+        fout.write(reinterpret_cast<const char*>(data + pos),
+                   static_cast<std::streamsize>(fsize));
+        if (!fout) throw std::runtime_error("Write error: " + out_path.string());
+
+        pos  += static_cast<size_t>(fsize);
+        done += static_cast<int64_t>(fsize) + path_len + 10;
+        if (fn && total > 0) fn(done, total);
+    }
+}
+
+// RAII temp-file helper — deletes the file on destruction if it still exists.
+struct TempFile {
+    fs::path path;
+    explicit TempFile(fs::path p) : path(std::move(p)) {}
+    ~TempFile() { std::error_code ec; fs::remove(path, ec); }
+    TempFile(const TempFile&) = delete;
+    TempFile& operator=(const TempFile&) = delete;
+};
+
+void encrypt_dir(const std::string& dir_path,
+                 const std::string& out_path,
+                 std::string_view   password,
+                 Mode               mode,
+                 ProgressFn         on_progress) {
+    const fs::path dir(to_fs_path(dir_path));
+    if (!fs::is_directory(dir))
+        throw std::runtime_error("Not a directory: " + dir_path);
+
+    // Measure total bytes for progress (pack = 0–50 %, encrypt = 50–100 %)
+    int64_t total_bytes = 0;
+    for (const auto& ent : fs::recursive_directory_iterator(dir))
+        if (ent.is_regular_file())
+            total_bytes += static_cast<int64_t>(ent.file_size());
+
+    // Phase 1: pack to CDIR in memory (0–50 %)
+    ProgressFn pack_fn;
+    if (on_progress && total_bytes > 0) {
+        pack_fn = [&on_progress, total_bytes](int64_t d, int64_t t) {
+            on_progress(d * 50 / (t > 0 ? t : 1), 100);
+        };
+    }
+    auto blob = pack_cdir(dir, total_bytes, pack_fn);
+
+    // Phase 2: encrypt the blob (50–100 %)
+    // Write blob to a temp file, then use encrypt_file with a remapped callback.
+    const fs::path tmp_path = to_fs_path(out_path + ".cdir.tmp");
+    {
+        TempFile guard(tmp_path);
+        {
+            std::ofstream tmp_f(tmp_path, std::ios::binary);
+            if (!tmp_f) throw std::runtime_error("Cannot create temp file: " + tmp_path.string());
+            tmp_f.write(reinterpret_cast<const char*>(blob.data()),
+                        static_cast<std::streamsize>(blob.size()));
+        }
+        blob.clear();
+        blob.shrink_to_fit();
+
+        ProgressFn enc_fn;
+        if (on_progress) {
+            enc_fn = [&on_progress](int64_t d, int64_t t) {
+                on_progress(50 + (t > 0 ? d * 50 / t : 50), 100);
+            };
+        }
+
+        // encrypt_file writes MAGIC; we need FOLDER_MAGIC — do it manually.
+        std::ifstream in(tmp_path, std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot open temp file");
+        in.seekg(0, std::ios::end);
+        const int64_t in_size = static_cast<int64_t>(in.tellg());
+        in.seekg(0);
+
+        std::ofstream out(to_fs_path(out_path), std::ios::binary);
+        if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
+
+        const Salt salt = random_salt();
+        IV iv{};
+        if (!mode_is_aead(mode)) {
+            if (mode_needs_iv(mode)) iv = random_iv();
+        } else if (nonce_len(mode) > 0) {
+            if (RAND_bytes(iv.data(), static_cast<int>(nonce_len(mode))) != 1)
+                throw std::runtime_error("RAND_bytes (nonce) failed");
+        }
+
+        const auto keys = derive_keys(password, salt);
+
+        FileHeader hdr{};
+        std::memcpy(hdr.magic, FileHeader::FOLDER_MAGIC, 4);
+        hdr.mode = static_cast<uint8_t>(mode);
+        std::memcpy(hdr.salt, salt.data(), SALT_LEN);
+        std::memcpy(hdr.iv,   iv.data(),   IV_LEN);
+        out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
+        if (!out) throw std::runtime_error("Write error on header");
+
+        if (mode_is_aead(mode))
+            encrypt_aead(in, out, keys, mode, iv, in_size, enc_fn);
+        else
+            encrypt_non_aead(in, out, keys,
+                             reinterpret_cast<const uint8_t*>(&hdr), sizeof(hdr),
+                             mode, iv, in_size, enc_fn);
+
+        if (!out) throw std::runtime_error("Write error on output file");
+        // TempFile destructor removes tmp_path
+    }
+    if (on_progress) on_progress(100, 100);
+}
+
+void decrypt_dir(const std::string& in_path,
+                 const std::string& out_dir,
+                 std::string_view   password,
+                 ProgressFn         on_progress) {
+    std::ifstream f(to_fs_path(in_path), std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
+
+    uint8_t raw_hdr[sizeof(FileHeader)];
+    f.read(reinterpret_cast<char*>(raw_hdr), sizeof(raw_hdr));
+    if (f.gcount() != static_cast<std::streamsize>(sizeof(raw_hdr)))
+        throw std::runtime_error("File too short");
+
+    FileHeader hdr{};
+    std::memcpy(&hdr, raw_hdr, sizeof(hdr));
+    if (std::memcmp(hdr.magic, FileHeader::FOLDER_MAGIC, 4) != 0)
+        throw std::runtime_error("Not a folder archive (.enc folder)");
+    if (hdr.mode > static_cast<uint8_t>(Mode::SIV))
+        throw std::runtime_error("Unknown cipher mode in file header");
+
+    const auto mode = static_cast<Mode>(hdr.mode);
+    Salt salt{}; IV iv{};
+    std::memcpy(salt.data(), hdr.salt, SALT_LEN);
+    std::memcpy(iv.data(),   hdr.iv,   IV_LEN);
+
+    f.seekg(0, std::ios::end);
+    auto file_size   = static_cast<std::streamoff>(f.tellg());
+    auto tag_size    = static_cast<std::streamoff>(auth_tag_size(mode));
+    auto hdr_size    = static_cast<std::streamoff>(sizeof(FileHeader));
+    auto ct_size_off = file_size - hdr_size - tag_size;
+    if (ct_size_off < 0) throw std::runtime_error("File too short to be valid");
+    auto cipher_size = static_cast<size_t>(ct_size_off);
+
+    const auto keys = derive_keys(password, salt);
+
+    // Phase 1: decrypt to CDIR temp blob (0–50 %)
+    const fs::path tmp_path = to_fs_path(in_path + ".cdir.tmp");
+    {
+        TempFile guard(tmp_path);
+        {
+            ProgressFn dec_fn;
+            if (on_progress) {
+                dec_fn = [&on_progress](int64_t d, int64_t t) {
+                    on_progress(t > 0 ? d * 50 / t : 0, 100);
+                };
+            }
+
+            std::ofstream tmp_out(tmp_path, std::ios::binary);
+            if (!tmp_out) throw std::runtime_error("Cannot create temp file");
+
+            if (mode_is_aead(mode))
+                decrypt_aead(f, tmp_out, keys, mode, iv, cipher_size, dec_fn);
+            else
+                decrypt_non_aead(f, tmp_out, raw_hdr, sizeof(raw_hdr),
+                                 keys, mode, iv, cipher_size, dec_fn);
+        }
+
+        // Phase 2: unpack CDIR (50–100 %)
+        std::ifstream tmp_in(tmp_path, std::ios::binary);
+        if (!tmp_in) throw std::runtime_error("Cannot open temp file for reading");
+        tmp_in.seekg(0, std::ios::end);
+        const auto blob_size = static_cast<size_t>(tmp_in.tellg());
+        tmp_in.seekg(0);
+        std::vector<uint8_t> blob(blob_size);
+        tmp_in.read(reinterpret_cast<char*>(blob.data()),
+                    static_cast<std::streamsize>(blob_size));
+
+        ProgressFn unpack_fn;
+        if (on_progress) {
+            unpack_fn = [&on_progress](int64_t d, int64_t t) {
+                on_progress(50 + (t > 0 ? d * 50 / t : 50), 100);
+            };
+        }
+
+        unpack_cdir(blob.data(), blob.size(), to_fs_path(out_dir), unpack_fn);
+        // TempFile destructor removes tmp_path
+    }
+    if (on_progress) on_progress(100, 100);
+}
+
+bool is_dir_archive(const std::string& in_path) {
+    std::ifstream f(to_fs_path(in_path), std::ios::binary);
+    if (!f) return false;
+    uint8_t magic[4]{};
+    f.read(reinterpret_cast<char*>(magic), 4);
+    return f.gcount() == 4 &&
+           std::memcmp(magic, FileHeader::FOLDER_MAGIC, 4) == 0;
 }
 
 }  // namespace crypto

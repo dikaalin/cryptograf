@@ -2,6 +2,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
@@ -20,6 +21,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSplitter>
@@ -58,8 +60,10 @@ class Worker : public QThread {
     Q_OBJECT
 public:
     std::function<void()> task;
+    void reportProgress(qint64 d, qint64 t) { emit progress(d, t); }
 signals:
     void done(bool ok, QString error);
+    void progress(qint64 done, qint64 total);
 protected:
     void run() override {
         try { task(); emit done(true, {}); }
@@ -154,6 +158,7 @@ QWidget* makeCopyRow(QLineEdit* display, std::function<QString()> fullTextFn, QW
 struct EncParts {
     QByteArray ciphertext, tag, salt, iv;
     bool       is_aead;
+    bool       is_folder;
     QString    mode_name;
 };
 
@@ -164,7 +169,9 @@ std::optional<EncParts> parseEncFile(const QString& path) {
     if (fsz < hsz) return {};
     crypto::FileHeader hdr{};
     if (f.read(reinterpret_cast<char*>(&hdr), hsz) != hsz) return {};
-    if (std::memcmp(hdr.magic, crypto::FileHeader::MAGIC, 4) != 0) return {};
+    const bool is_file   = std::memcmp(hdr.magic, crypto::FileHeader::MAGIC,        4) == 0;
+    const bool is_folder = std::memcmp(hdr.magic, crypto::FileHeader::FOLDER_MAGIC, 4) == 0;
+    if (!is_file && !is_folder) return {};
     if (hdr.mode > static_cast<uint8_t>(crypto::Mode::SIV)) return {};
     const auto   mode = static_cast<crypto::Mode>(hdr.mode);
     const qint64 tsz  = static_cast<qint64>(crypto::auth_tag_size(mode));
@@ -178,6 +185,7 @@ std::optional<EncParts> parseEncFile(const QString& path) {
         QByteArray(reinterpret_cast<const char*>(hdr.salt), crypto::SALT_LEN),
         QByteArray(reinterpret_cast<const char*>(hdr.iv),   crypto::IV_LEN),
         crypto::mode_is_aead(mode),
+        is_folder,
         QString::fromStdString(crypto::mode_to_string(mode))
     };
 }
@@ -187,15 +195,18 @@ QString buildFileInfo(const QString& path) {
     if (!p) return "Не удалось разобрать файл .enc.";
     return QString(
         "Файл         : %1\n"
-        "Режим        : AES-256-%2\n"
-        "AEAD         : %3\n"
-        "Шифртекст    : %4 байт\n"
-        "Соль         : %5\n"
-        "IV / Nonce   : %6\n"
-        "%7: %8\n"
-        "KDF          : PBKDF2-HMAC-SHA256, %9 итераций\n"
-        "Целостность  : %10")
-        .arg(path).arg(p->mode_name)
+        "Тип          : %2\n"
+        "Режим        : AES-256-%3\n"
+        "AEAD         : %4\n"
+        "Шифртекст    : %5 байт\n"
+        "Соль         : %6\n"
+        "IV / Nonce   : %7\n"
+        "%8: %9\n"
+        "KDF          : PBKDF2-HMAC-SHA256, %10 итераций\n"
+        "Целостность  : %11")
+        .arg(path)
+        .arg(p->is_folder ? "Архив папки (CDIR)" : "Файл")
+        .arg(p->mode_name)
         .arg(p->is_aead ? "да" : "нет")
         .arg(p->ciphertext.size())
         .arg(QString::fromLatin1(p->salt.toHex()))
@@ -341,6 +352,19 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QStatusBar { color: #7f8090; font-size: 11px; }
+QProgressBar {
+    background: #eef0fb;
+    border: 1.5px solid #dddee5;
+    border-radius: 6px;
+    height: 10px;
+    text-align: center;
+    font-size: 11px;
+    color: #555666;
+}
+QProgressBar::chunk {
+    background: #4f46e5;
+    border-radius: 5px;
+}
 )qss";
 
 // ── CryptografWindow ──────────────────────────────────────────────────────────
@@ -426,6 +450,11 @@ class CryptografWindow : public QMainWindow {
         form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
         vlay->addLayout(form);
 
+        auto* typeCombo = new QComboBox;
+        typeCombo->addItem("Файл");
+        typeCombo->addItem("Папка");
+        form->addRow("Тип:", typeCombo);
+
         auto* combo = new QComboBox;
         for (const auto& m : MODES) combo->addItem(m.name);
         combo->setCurrentIndex(4);
@@ -439,8 +468,33 @@ class CryptografWindow : public QMainWindow {
         });
         form->addRow("", desc);
 
-        DropEdit *inEdit, *outEdit;
-        form->addRow("Входной файл:",  makeFileRow(inEdit,  true,  inner));
+        // Input row (manual so browse button can switch file/folder mode)
+        auto* inRow = new QWidget(inner);
+        auto* inH   = new QHBoxLayout(inRow);
+        inH->setContentsMargins(0,0,0,0); inH->setSpacing(6);
+        auto* inEdit = new DropEdit(inRow);
+        inEdit->setPlaceholderText("Перетащите файл или нажмите «Обзор…»");
+        auto* inBtn  = new QPushButton("Обзор…", inRow);
+        inBtn->setFixedWidth(76);
+        inH->addWidget(inEdit); inH->addWidget(inBtn);
+        auto* inLabel = new QLabel("Входной файл:");
+        form->addRow(inLabel, inRow);
+
+        connect(inBtn, &QPushButton::clicked, [inEdit, typeCombo, inner]() {
+            const bool isDir = typeCombo->currentIndex() == 1;
+            QString p = isDir
+                ? QFileDialog::getExistingDirectory(inner, "Выбрать папку для шифрования")
+                : QFileDialog::getOpenFileName(inner, "Открыть файл");
+            if (!p.isEmpty()) inEdit->setText(p);
+        });
+        connect(typeCombo, &QComboBox::currentIndexChanged, [inEdit, inLabel](int i) {
+            const bool isDir = i == 1;
+            inLabel->setText(isDir ? "Входная папка:" : "Входной файл:");
+            inEdit->setPlaceholderText(isDir ? "Перетащите папку или нажмите «Обзор…»"
+                                             : "Перетащите файл или нажмите «Обзор…»");
+        });
+
+        DropEdit* outEdit;
         form->addRow("Выходной файл:", makeFileRow(outEdit, false, inner));
         connect(inEdit, &QLineEdit::textChanged, [outEdit](const QString& t) {
             if (outEdit->text().isEmpty() && !t.isEmpty()) outEdit->setText(t + ".enc");
@@ -452,6 +506,13 @@ class CryptografWindow : public QMainWindow {
 
         auto* btn = makeActionBtn("  Зашифровать", "#4f46e5", "#4338ca", "#a5b4fc");
         form->addRow("", btn);
+
+        auto* progBar = new QProgressBar;
+        progBar->setRange(0, 100);
+        progBar->setValue(0);
+        progBar->setVisible(false);
+        progBar->setTextVisible(false);
+        form->addRow("", progBar);
 
         auto* resultBox = new QGroupBox("Результат шифрования");
         resultBox->setVisible(false);
@@ -482,11 +543,17 @@ class CryptografWindow : public QMainWindow {
             const QString p1  = pw1->text();
             const QString p2  = pw2->text();
             const int     mi  = combo->currentIndex();
-            if (in.isEmpty())       { QMessageBox::warning(this,"Ошибка","Укажите входной файл."); return; }
-            if (out.isEmpty())      { QMessageBox::warning(this,"Ошибка","Укажите выходной файл."); return; }
-            if (p1.isEmpty())       { QMessageBox::warning(this,"Ошибка","Пароль не должен быть пустым."); return; }
-            if (p1 != p2)           { QMessageBox::warning(this,"Ошибка","Пароли не совпадают."); return; }
-            if (!QFile::exists(in)) { QMessageBox::warning(this,"Ошибка","Входной файл не найден."); return; }
+            const bool isDir  = typeCombo->currentIndex() == 1;
+            if (in.isEmpty())  { QMessageBox::warning(this,"Ошибка",
+                                     isDir ? "Укажите входную папку." : "Укажите входной файл."); return; }
+            if (out.isEmpty()) { QMessageBox::warning(this,"Ошибка","Укажите выходной файл."); return; }
+            if (p1.isEmpty())  { QMessageBox::warning(this,"Ошибка","Пароль не должен быть пустым."); return; }
+            if (p1 != p2)      { QMessageBox::warning(this,"Ошибка","Пароли не совпадают."); return; }
+            if (isDir) {
+                if (!QDir(in).exists()) { QMessageBox::warning(this,"Ошибка","Папка не найдена."); return; }
+            } else {
+                if (!QFile::exists(in)) { QMessageBox::warning(this,"Ошибка","Входной файл не найден."); return; }
+            }
             if (QFile::exists(out)) {
                 if (QMessageBox::question(this,"Файл существует",
                         QString("'%1' уже существует.\nПерезаписать?").arg(out))
@@ -494,18 +561,36 @@ class CryptografWindow : public QMainWindow {
                 QFile::remove(out);
             }
             resultBox->setVisible(false);
+            progBar->setValue(0);
+            progBar->setVisible(true);
             setBusy(true);
             logMsg(QString("Шифрование [%1]: %2  →  %3").arg(combo->currentText(), in, out));
             work_ = new Worker;
             const auto mode = MODES[mi].mode;
-            work_->task = [i=in.toStdString(),o=out.toStdString(),p=p1.toStdString(),mode]() {
-                crypto::encrypt_file(i, o, p, mode);
-            };
+            if (isDir) {
+                work_->task = [i=in.toStdString(),o=out.toStdString(),
+                                p=p1.toStdString(),mode,w=work_]() {
+                    crypto::encrypt_dir(i, o, p, mode, [w](int64_t d, int64_t t) {
+                        w->reportProgress(d, t);
+                    });
+                };
+            } else {
+                work_->task = [i=in.toStdString(),o=out.toStdString(),
+                                p=p1.toStdString(),mode,w=work_]() {
+                    crypto::encrypt_file(i, o, p, mode, [w](int64_t d, int64_t t) {
+                        w->reportProgress(d, t);
+                    });
+                };
+            }
+            connect(work_, &Worker::progress, progBar, [progBar](qint64 d, qint64 t) {
+                if (t > 0) progBar->setValue(static_cast<int>(d * 100 / t));
+            }, Qt::QueuedConnection);
             connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                progBar->setVisible(false);
                 setBusy(false);
                 if (ok) {
                     auto parts = parseEncFile(out);
-                    if (parts) {
+                    if (parts && !parts->is_folder) {
                         constexpr int PREV = 24;
                         const auto& ct = parts->ciphertext;
                         ctDisplay->setText(ct.size() <= PREV
@@ -561,12 +646,36 @@ class CryptografWindow : public QMainWindow {
         form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
         vlay->addLayout(form);
 
-        DropEdit *inEdit, *outEdit;
-        form->addRow("Зашифрованный файл:", makeFileRow(inEdit,  true,  formPane));
-        form->addRow("Выходной файл:",      makeFileRow(outEdit, false, formPane));
-        connect(inEdit, &QLineEdit::textChanged, [outEdit](const QString& t) {
-            if (outEdit->text().isEmpty() && !t.isEmpty()) {
-                QString o = t;
+        DropEdit* inEdit;
+        form->addRow("Зашифрованный файл:", makeFileRow(inEdit, true, formPane));
+
+        // Output row (manual — label and picker switch on folder-archive detection)
+        auto* outRow = new QWidget(formPane);
+        auto* outH   = new QHBoxLayout(outRow);
+        outH->setContentsMargins(0,0,0,0); outH->setSpacing(6);
+        auto* outEdit = new DropEdit(outRow);
+        outEdit->setPlaceholderText("Путь к выходному файлу…");
+        auto* outBtn  = new QPushButton("Обзор…", outRow);
+        outBtn->setFixedWidth(76);
+        outH->addWidget(outEdit); outH->addWidget(outBtn);
+        auto* outLabel = new QLabel("Выходной файл:");
+        form->addRow(outLabel, outRow);
+
+        connect(outBtn, &QPushButton::clicked, [outEdit, inEdit, formPane]() {
+            const bool isFolder = crypto::is_dir_archive(inEdit->text().trimmed().toStdString());
+            QString p = isFolder
+                ? QFileDialog::getExistingDirectory(formPane, "Выбрать папку назначения")
+                : QFileDialog::getSaveFileName(formPane, "Сохранить как");
+            if (!p.isEmpty()) outEdit->setText(p);
+        });
+
+        connect(inEdit, &QLineEdit::textChanged, [outEdit, outLabel](const QString& t) {
+            if (t.isEmpty()) return;
+            const bool isFolder = crypto::is_dir_archive(t.trimmed().toStdString());
+            outLabel->setText(isFolder ? "Папка назначения:" : "Выходной файл:");
+            outEdit->setPlaceholderText(isFolder ? "Путь к папке…" : "Путь к выходному файлу…");
+            if (outEdit->text().isEmpty()) {
+                QString o = t.trimmed();
                 if (o.endsWith(".enc", Qt::CaseInsensitive)) o.chop(4); else o += ".dec";
                 outEdit->setText(o);
             }
@@ -576,6 +685,14 @@ class CryptografWindow : public QMainWindow {
         form->addRow("Пароль:", makePwRow(pw, "Введите пароль…", formPane));
         auto* btn = makeActionBtn("  Расшифровать", "#16a34a", "#15803d", "#86efac");
         form->addRow("", btn);
+
+        auto* progBar = new QProgressBar;
+        progBar->setRange(0, 100);
+        progBar->setValue(0);
+        progBar->setVisible(false);
+        progBar->setTextVisible(false);
+        form->addRow("", progBar);
+
         vlay->addStretch(1);
 
         connect(btn, &QPushButton::clicked, this, [=, this]() {
@@ -583,25 +700,56 @@ class CryptografWindow : public QMainWindow {
             const QString out = outEdit->text().trimmed();
             const QString p   = pw->text();
             if (in.isEmpty())       { QMessageBox::warning(this,"Ошибка","Укажите файл для расшифрования."); return; }
-            if (out.isEmpty())      { QMessageBox::warning(this,"Ошибка","Укажите выходной файл."); return; }
+            if (out.isEmpty())      { QMessageBox::warning(this,"Ошибка","Укажите выходной путь."); return; }
             if (p.isEmpty())        { QMessageBox::warning(this,"Ошибка","Пароль не должен быть пустым."); return; }
             if (!QFile::exists(in)) { QMessageBox::warning(this,"Ошибка","Входной файл не найден."); return; }
-            if (QFile::exists(out)) {
-                if (QMessageBox::question(this,"Файл существует",
-                        QString("'%1' уже существует.\nПерезаписать?").arg(out))
-                        != QMessageBox::Yes) return;
-                QFile::remove(out);
+
+            const bool isFolder = crypto::is_dir_archive(in.toStdString());
+            if (!isFolder) {
+                if (QFile::exists(out)) {
+                    if (QMessageBox::question(this,"Файл существует",
+                            QString("'%1' уже существует.\nПерезаписать?").arg(out))
+                            != QMessageBox::Yes) return;
+                    QFile::remove(out);
+                }
             }
+
+            progBar->setValue(0);
+            progBar->setVisible(true);
             setBusy(true);
             logMsg(QString("Расшифрование: %1  →  %2").arg(in, out));
             work_ = new Worker;
-            work_->task = [i=in.toStdString(),o=out.toStdString(),pw=p.toStdString()]() {
-                crypto::decrypt_file(i, o, pw);
-            };
+            if (isFolder) {
+                work_->task = [i=in.toStdString(),o=out.toStdString(),
+                                pw=p.toStdString(),w=work_]() {
+                    crypto::decrypt_dir(i, o, pw, [w](int64_t d, int64_t t) {
+                        w->reportProgress(d, t);
+                    });
+                };
+            } else {
+                work_->task = [i=in.toStdString(),o=out.toStdString(),
+                                pw=p.toStdString(),w=work_]() {
+                    crypto::decrypt_file(i, o, pw, [w](int64_t d, int64_t t) {
+                        w->reportProgress(d, t);
+                    });
+                };
+            }
+            connect(work_, &Worker::progress, progBar, [progBar](qint64 d, qint64 t) {
+                if (t > 0) progBar->setValue(static_cast<int>(d * 100 / t));
+            }, Qt::QueuedConnection);
             connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                progBar->setVisible(false);
                 setBusy(false);
-                if (ok) logMsg(QString("✓ Готово. Размер: %1 байт").arg(QFileInfo(out).size()));
-                else  { QFile::remove(out); logMsg("✗ Ошибка: "+err); QMessageBox::critical(this,"Ошибка расшифрования",err); }
+                if (ok) {
+                    if (isFolder)
+                        logMsg(QString("✓ Готово. Папка: %1").arg(out));
+                    else
+                        logMsg(QString("✓ Готово. Размер: %1 байт").arg(QFileInfo(out).size()));
+                } else {
+                    if (!isFolder) QFile::remove(out);
+                    logMsg("✗ Ошибка: "+err);
+                    QMessageBox::critical(this,"Ошибка расшифрования",err);
+                }
                 work_->deleteLater(); work_ = nullptr;
             }, Qt::QueuedConnection);
             work_->start();

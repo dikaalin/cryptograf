@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -55,8 +56,12 @@ struct DerivedKeys {
     HMACKey mac;
 };
 
+// Progress callback: fn(bytes_done, bytes_total).
+// Called from a worker thread; must be thread-safe (Qt signals are fine).
+using ProgressFn = std::function<void(int64_t, int64_t)>;
+
 // File format (v3):
-//   [4]    magic  "AES\x03"
+//   [4]    magic  "AES\x03"  (file) | "AES\x04" (folder archive)
 //   [1]    mode   (uint8_t)
 //   [16]   salt   (PBKDF2 salt)
 //   [16]   iv     (non-AEAD: full 16-byte IV; GCM/CCM/GCM-SIV: 12-byte nonce in [0..11];
@@ -66,7 +71,8 @@ struct DerivedKeys {
 //   [32]   HMAC-SHA256(mac_key, header||ciphertext)   ← non-AEAD only
 //   [16]   AEAD auth tag                              ← AEAD only
 struct FileHeader {
-    static constexpr char MAGIC[4] = {'A', 'E', 'S', '\x03'};
+    static constexpr char MAGIC[4]        = {'A', 'E', 'S', '\x03'};
+    static constexpr char FOLDER_MAGIC[4] = {'A', 'E', 'S', '\x04'};
     uint8_t magic[4];
     uint8_t mode;
     uint8_t salt[SALT_LEN];
@@ -81,10 +87,28 @@ IV          random_iv();
 void encrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
-                  Mode               mode);
+                  Mode               mode,
+                  ProgressFn         on_progress = nullptr);
 
 void decrypt_file(const std::string& in_path,
                   const std::string& out_path,
-                  std::string_view   password);
+                  std::string_view   password,
+                  ProgressFn         on_progress = nullptr);
+
+// Folder encryption: packs dir_path into a CDIR archive then encrypts it.
+void encrypt_dir(const std::string& dir_path,
+                 const std::string& out_path,
+                 std::string_view   password,
+                 Mode               mode,
+                 ProgressFn         on_progress = nullptr);
+
+// Folder decryption: decrypts the archive then extracts into out_dir.
+void decrypt_dir(const std::string& in_path,
+                 const std::string& out_dir,
+                 std::string_view   password,
+                 ProgressFn         on_progress = nullptr);
+
+// Returns true when in_path is an encrypted folder archive (FOLDER_MAGIC).
+bool is_dir_archive(const std::string& in_path);
 
 }  // namespace crypto
