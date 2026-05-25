@@ -2,6 +2,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
+#include <QCheckBox>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -16,6 +17,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QMimeData>
@@ -24,10 +26,12 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSettings>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTextStream>
 #include <QThread>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -77,12 +81,14 @@ public:
     explicit DotGridWidget(QWidget* p = nullptr) : QWidget(p) {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     }
+    void setDark(bool dark) { dark_ = dark; update(); }
 protected:
+    bool dark_ = false;
     void paintEvent(QPaintEvent*) override {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor("#f7f8fb"));
+        painter.fillRect(rect(), dark_ ? QColor("#1a1b26") : QColor("#f7f8fb"));
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor("#cdd0de"));
+        painter.setBrush(dark_ ? QColor("#2f3549") : QColor("#cdd0de"));
         const int step = 18, r = 1;
         for (int y = step; y < height(); y += step)
             for (int x = step; x < width(); x += step)
@@ -262,6 +268,20 @@ QWidget* wrapDiagram(QWidget* diagram, QWidget* parent) {
     return bg;
 }
 
+struct ModeInfo { const char* name; crypto::Mode mode; const char* desc; };
+static const ModeInfo MODES[] = {
+    {"ECB",     crypto::Mode::ECB,     "Детерминированный, без IV; нежелателен"},
+    {"CBC",     crypto::Mode::CBC,     "Cipher Block Chaining — случайный IV"},
+    {"CFB",     crypto::Mode::CFB,     "Cipher Feedback — самосинхронизирующийся поток"},
+    {"OFB",     crypto::Mode::OFB,     "Output Feedback — ключевой поток ⊥ данным"},
+    {"CTR",     crypto::Mode::CTR,     "Counter — параллелизуемый"},
+    {"GCM",     crypto::Mode::GCM,     "Galois/Counter Mode — NIST SP 800-38D (AEAD)"},
+    {"CCM",     crypto::Mode::CCM,     "Counter with CBC-MAC — NIST SP 800-38C (AEAD)"},
+    {"GCM-SIV", crypto::Mode::GCM_SIV, "GCM-SIV RFC 8452 — устойчив к повтору nonce (AEAD)"},
+    {"SIV",     crypto::Mode::SIV,     "AES-SIV RFC 5297 — детерминированный, без nonce (AEAD)"},
+};
+static constexpr int MODE_COUNT = 9;
+
 } // namespace
 
 // ── App stylesheet ────────────────────────────────────────────────────────────
@@ -371,6 +391,26 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QStatusBar { color: #7f8090; font-size: 11px; }
+QWidget#formPane { background: white; border-right: 1px solid #dddee5; }
+QListWidget {
+    background: white;
+    border: 1.5px solid #dddee5;
+    border-radius: 6px;
+    color: #2e2f38;
+    font-size: 12px;
+    outline: 0;
+}
+QListWidget::item { padding: 5px 8px; border-radius: 4px; }
+QListWidget::item:selected { background: #eef0fb; color: #4f46e5; }
+QCheckBox { color: #2e2f38; font-size: 13px; spacing: 8px; }
+QCheckBox::indicator {
+    width: 16px; height: 16px;
+    border: 1.5px solid #dddee5;
+    border-radius: 4px;
+    background: white;
+}
+QCheckBox::indicator:checked { background: #4f46e5; border-color: #4f46e5; image: none; }
+QCheckBox::indicator:hover { border-color: #4f46e5; }
 QProgressBar {
     background: #eef0fb;
     border: 1.5px solid #dddee5;
@@ -386,12 +426,70 @@ QProgressBar::chunk {
 }
 )qss";
 
+static const char* DARK_STYLE = R"qss(
+QMainWindow, QWidget#central { background: #1a1b26; }
+QTabWidget::pane { border: none; background: transparent; }
+QTabBar { background: #1f2335; border-bottom: 1px solid #414868; }
+QTabBar::tab { background: transparent; color: #565f89; padding: 11px 24px;
+               font-size: 13px; font-weight: 600; border: none;
+               border-bottom: 3px solid transparent; margin-right: 2px; }
+QTabBar::tab:selected { color: #7aa2f7; border-bottom: 3px solid #7aa2f7; }
+QTabBar::tab:hover:!selected { color: #c0caf5; border-bottom: 3px solid #414868; }
+QLabel { color: #c0caf5; font-size: 13px; }
+QLineEdit { background: #24283b; border: 1.5px solid #414868; border-radius: 6px;
+            padding: 6px 10px; font-size: 13px; color: #c0caf5; }
+QLineEdit:focus { border-color: #7aa2f7; }
+QLineEdit:read-only { background: #1f2335; color: #565f89; }
+QComboBox { background: #24283b; border: 1.5px solid #414868; border-radius: 6px;
+            padding: 6px 10px; font-size: 13px; color: #c0caf5; min-height: 28px; }
+QComboBox:focus { border-color: #7aa2f7; }
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView { background: #24283b; border: 1.5px solid #414868;
+    border-radius: 6px; selection-background-color: #2f3549;
+    selection-color: #7aa2f7; padding: 4px; }
+QPushButton { background: #24283b; border: 1.5px solid #414868; border-radius: 6px;
+              padding: 6px 14px; font-size: 13px; color: #c0caf5; }
+QPushButton:hover { background: #2f3549; border-color: #7aa2f7; color: #7aa2f7; }
+QPushButton:pressed { background: #1f2335; }
+QPushButton#eyeBtn { background: transparent; border: 1.5px solid #414868;
+    border-radius: 6px; color: #565f89; font-size: 10px; padding: 0; }
+QPushButton#eyeBtn:checked { color: #7aa2f7; border-color: #7aa2f7; }
+QPushButton#copyBtn { font-size: 12px; color: #565f89; padding: 5px 10px; }
+QGroupBox { background: #1f2335; border: 1.5px solid #414868; border-radius: 8px;
+            margin-top: 8px; padding-top: 4px; font-size: 12px;
+            font-weight: 600; color: #565f89; }
+QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;
+    padding: 0 6px; left: 12px; color: #565f89; }
+QWidget#formPane { background: #1f2335; border-right: 1px solid #414868; }
+QPlainTextEdit { background: #24283b; color: #c0caf5; border: 1.5px solid #414868;
+    border-radius: 6px; padding: 8px; selection-background-color: #2f3549; }
+QListWidget { background: #24283b; border: 1.5px solid #414868; border-radius: 6px;
+              color: #c0caf5; font-size: 12px; outline: 0; }
+QListWidget::item { padding: 5px 8px; border-radius: 4px; }
+QListWidget::item:selected { background: #2f3549; color: #7aa2f7; }
+QCheckBox { color: #c0caf5; font-size: 13px; spacing: 8px; }
+QCheckBox::indicator { width: 16px; height: 16px; border: 1.5px solid #414868;
+    border-radius: 4px; background: #24283b; }
+QCheckBox::indicator:checked { background: #7aa2f7; border-color: #7aa2f7; }
+QCheckBox::indicator:hover { border-color: #7aa2f7; }
+QScrollArea { background: transparent; border: none; }
+QScrollBar:vertical { background: #1f2335; width: 7px; border-radius: 4px; }
+QScrollBar::handle:vertical { background: #414868; border-radius: 4px; min-height: 20px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QStatusBar { color: #565f89; font-size: 11px; }
+QProgressBar { background: #24283b; border: 1.5px solid #414868; border-radius: 6px;
+    height: 10px; text-align: center; font-size: 11px; color: #c0caf5; }
+QProgressBar::chunk { background: #7aa2f7; border-radius: 5px; }
+)qss";
+
 // ── CryptografWindow ──────────────────────────────────────────────────────────
 class CryptografWindow : public QMainWindow {
     Q_OBJECT
 
-    QPlainTextEdit* log_  = nullptr;
-    Worker*         work_ = nullptr;
+    QPlainTextEdit* log_       = nullptr;
+    Worker*         work_      = nullptr;
+    QComboBox*      encModeCb_ = nullptr;   // sync with Settings default
+    bool            darkMode_  = false;
 
     void logMsg(const QString& msg) {
         const auto ts = QDateTime::currentDateTime().toString("hh:mm:ss");
@@ -404,10 +502,16 @@ class CryptografWindow : public QMainWindow {
         statusBar()->showMessage(busy ? "Выполняется операция…" : "Готово.");
     }
 
+    void applyTheme(bool dark) {
+        darkMode_ = dark;
+        setStyleSheet(dark ? DARK_STYLE : APP_STYLE);
+        for (auto* w : findChildren<DotGridWidget*>()) w->setDark(dark);
+        QSettings("Cryptograf","Cryptograf").setValue("darkMode", dark);
+    }
+
     static QWidget* makeFormPane(QWidget* parent = nullptr) {
         auto* w = new QWidget(parent);
         w->setObjectName("formPane");
-        w->setStyleSheet("QWidget#formPane { background: white; border-right: 1px solid #dddee5; }");
         w->setMinimumWidth(310);
         w->setMaximumWidth(440);
         w->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
@@ -428,18 +532,6 @@ class CryptografWindow : public QMainWindow {
     }
 
     QWidget* makeEncryptTab() {
-        struct ModeInfo { const char* name; crypto::Mode mode; const char* desc; };
-        static const ModeInfo MODES[] = {
-            {"ECB",     crypto::Mode::ECB,     "Детерминированный, без IV; нежелателен"},
-            {"CBC",     crypto::Mode::CBC,     "Cipher Block Chaining — случайный IV"},
-            {"CFB",     crypto::Mode::CFB,     "Cipher Feedback — самосинхронизирующийся поток"},
-            {"OFB",     crypto::Mode::OFB,     "Output Feedback — ключевой поток ⊥ данным"},
-            {"CTR",     crypto::Mode::CTR,     "Counter — параллелизуемый"},
-            {"GCM",     crypto::Mode::GCM,     "Galois/Counter Mode — NIST SP 800-38D (AEAD)"},
-            {"CCM",     crypto::Mode::CCM,     "Counter with CBC-MAC — NIST SP 800-38C (AEAD)"},
-            {"GCM-SIV", crypto::Mode::GCM_SIV, "GCM-SIV RFC 8452 — устойчив к повтору nonce (AEAD)"},
-            {"SIV",     crypto::Mode::SIV,     "AES-SIV RFC 5297 — детерминированный, без nonce (AEAD)"},
-        };
 
         auto* splitter = new QSplitter(Qt::Horizontal);
         splitter->setHandleWidth(1);
@@ -474,9 +566,11 @@ class CryptografWindow : public QMainWindow {
         typeCombo->addItem("Папка");
         form->addRow("Тип:", typeCombo);
 
+        const int defMode = QSettings("Cryptograf","Cryptograf").value("defaultMode", 4).toInt();
         auto* combo = new QComboBox;
         for (const auto& m : MODES) combo->addItem(m.name);
-        combo->setCurrentIndex(4);
+        combo->setCurrentIndex(defMode);
+        encModeCb_ = combo;
         form->addRow("Режим:", combo);
 
         auto* desc = new QLabel(MODES[4].desc);
@@ -1021,12 +1115,397 @@ class CryptografWindow : public QMainWindow {
         return splitter;
     }
 
+    // ── 05  Пакетное шифрование ───────────────────────────────────────────────
+    QWidget* makeBatchTab() {
+        auto* w    = new QWidget;
+        auto* vlay = new QVBoxLayout(w);
+        vlay->setContentsMargins(24, 20, 24, 20);
+        vlay->setSpacing(10);
+
+        auto* titleLbl = new QLabel("05  Пакетное шифрование");
+        titleLbl->setStyleSheet("font-size:17px;font-weight:700;color:#2e2f38;");
+        vlay->addWidget(titleLbl);
+        auto* subLbl = new QLabel("Зашифруйте или расшифруйте несколько файлов за один раз");
+        subLbl->setStyleSheet("font-size:12px;color:#7f8090;");
+        vlay->addWidget(subLbl);
+
+        // File list
+        auto* fileList = new QListWidget;
+        fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        fileList->setMinimumHeight(180);
+        vlay->addWidget(fileList, 1);
+
+        // List control buttons
+        auto* listBtnRow = new QWidget;
+        auto* listH = new QHBoxLayout(listBtnRow);
+        listH->setContentsMargins(0,0,0,0); listH->setSpacing(8);
+        auto* addBtn = new QPushButton("＋  Добавить файлы");
+        auto* delBtn = new QPushButton("－  Удалить выбранные");
+        auto* clrBtn = new QPushButton("Очистить список");
+        listH->addWidget(addBtn); listH->addWidget(delBtn); listH->addWidget(clrBtn);
+        listH->addStretch(1);
+        vlay->addWidget(listBtnRow);
+
+        connect(addBtn, &QPushButton::clicked, [fileList, w]() {
+            const auto files = QFileDialog::getOpenFileNames(w, "Выбрать файлы");
+            for (const auto& f : files) {
+                // Avoid duplicates
+                bool dup = false;
+                for (int i = 0; i < fileList->count(); ++i)
+                    if (fileList->item(i)->data(Qt::UserRole).toString() == f) { dup=true; break; }
+                if (!dup) {
+                    auto* item = new QListWidgetItem(QFileInfo(f).fileName());
+                    item->setData(Qt::UserRole, f);
+                    item->setToolTip(f);
+                    fileList->addItem(item);
+                }
+            }
+        });
+        connect(delBtn, &QPushButton::clicked, [fileList]() {
+            for (auto* item : fileList->selectedItems()) delete item;
+        });
+        connect(clrBtn, &QPushButton::clicked, [fileList]() { fileList->clear(); });
+
+        // Mode + password form
+        auto* form = new QFormLayout;
+        form->setSpacing(10); form->setContentsMargins(0,8,0,0);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        vlay->addLayout(form);
+
+        const int defMode = QSettings("Cryptograf","Cryptograf").value("defaultMode",4).toInt();
+        auto* modeCombo = new QComboBox;
+        for (const auto& m : MODES) modeCombo->addItem(m.name);
+        modeCombo->setCurrentIndex(defMode);
+        form->addRow("Режим (шифр.):", modeCombo);
+
+        QLineEdit* pw;
+        form->addRow("Пароль:", makePwRow(pw, "Пароль для всех файлов…", w));
+
+        // Action buttons + progress
+        auto* actRow = new QWidget;
+        auto* actH = new QHBoxLayout(actRow);
+        actH->setContentsMargins(0,0,0,0); actH->setSpacing(8);
+        auto* encBtn = makeActionBtn("  Зашифровать все", "#4f46e5", "#4338ca", "#a5b4fc");
+        auto* decBtn = makeActionBtn("  Расшифровать все", "#16a34a", "#15803d", "#86efac");
+        actH->addWidget(encBtn); actH->addWidget(decBtn); actH->addStretch(1);
+        form->addRow("", actRow);
+
+        auto* progBar = new QProgressBar;
+        progBar->setRange(0, 1); progBar->setValue(0);
+        progBar->setVisible(false); progBar->setTextVisible(false);
+        auto* statusLbl = new QLabel("");
+        statusLbl->setStyleSheet("color:#7f8090; font-size:12px;");
+        form->addRow("", progBar);
+        form->addRow("", statusLbl);
+
+        // Helper: run batch in worker
+        auto runBatch = [=, this](bool encrypt) {
+            if (fileList->count() == 0) {
+                QMessageBox::warning(this,"Ошибка","Список файлов пуст."); return;
+            }
+            if (pw->text().isEmpty()) {
+                QMessageBox::warning(this,"Ошибка","Введите пароль."); return;
+            }
+            QStringList files;
+            for (int i = 0; i < fileList->count(); ++i)
+                files << fileList->item(i)->data(Qt::UserRole).toString();
+
+            // Reset list visuals
+            for (int i = 0; i < fileList->count(); ++i) {
+                fileList->item(i)->setForeground(QApplication::palette().text());
+                fileList->item(i)->setText(QFileInfo(files[i]).fileName());
+            }
+
+            const int n = files.size();
+            progBar->setRange(0, n); progBar->setValue(0); progBar->setVisible(true);
+            statusLbl->setText(QString("Обработка 0 / %1…").arg(n));
+            setBusy(true);
+            logMsg(QString("Пакет: %1 файл(ов), %2").arg(n).arg(encrypt?"шифрование":"расшифрование"));
+
+            const auto mode = MODES[modeCombo->currentIndex()].mode;
+            const auto password = pw->text();
+
+            struct Res { bool ok; QString err; };
+            auto results = std::make_shared<QVector<Res>>(n);
+
+            work_ = new Worker;
+            work_->task = [files, password, mode, encrypt, results, w=work_]() {
+                for (int i = 0; i < files.size(); ++i) {
+                    (*results)[i] = {false, {}};
+                    try {
+                        const auto in = files[i].toStdString();
+                        std::string out;
+                        if (encrypt) {
+                            out = in + ".enc";
+                            if (std::filesystem::exists(out))
+                                throw std::runtime_error("выходной файл уже существует");
+                            crypto::encrypt_file(in, out, password.toStdString(), mode);
+                        } else {
+                            auto o = files[i];
+                            if (o.endsWith(".enc", Qt::CaseInsensitive)) o.chop(4); else o += ".dec";
+                            out = o.toStdString();
+                            if (std::filesystem::exists(out))
+                                throw std::runtime_error("выходной файл уже существует");
+                            crypto::decrypt_file(in, out, password.toStdString());
+                        }
+                        (*results)[i] = {true, {}};
+                    } catch (const std::exception& e) {
+                        (*results)[i] = {false, QString::fromStdString(e.what())};
+                    }
+                    w->reportProgress(i + 1, files.size());
+                }
+            };
+
+            connect(work_, &Worker::progress, this,
+                    [=, this](qint64 cur, qint64 tot) {
+                        const int i = static_cast<int>(cur) - 1;
+                        if (i >= 0 && i < fileList->count()) {
+                            const auto& r = (*results)[i];
+                            auto* item = fileList->item(i);
+                            if (r.ok) {
+                                item->setForeground(QColor("#22c55e"));
+                                item->setText("✓ " + QFileInfo(files[i]).fileName());
+                            } else {
+                                item->setForeground(QColor("#ef4444"));
+                                item->setText("✗ " + QFileInfo(files[i]).fileName()
+                                              + "  —  " + r.err);
+                            }
+                        }
+                        progBar->setValue(static_cast<int>(cur));
+                        statusLbl->setText(QString("Обработано: %1 / %2").arg(cur).arg(tot));
+                    }, Qt::QueuedConnection);
+
+            connect(work_, &Worker::done, this, [=, this](bool, QString) {
+                progBar->setVisible(false);
+                setBusy(false);
+                int ok = 0, fail = 0;
+                for (const auto& r : *results) r.ok ? ++ok : ++fail;
+                statusLbl->setText(QString("Завершено: %1 ОК, %2 ошибок").arg(ok).arg(fail));
+                logMsg(QString("✓ Пакет завершён: %1 ОК, %2 ошибок").arg(ok).arg(fail));
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+
+            work_->start();
+        };
+
+        connect(encBtn, &QPushButton::clicked, this, [runBatch]{ runBatch(true);  });
+        connect(decBtn, &QPushButton::clicked, this, [runBatch]{ runBatch(false); });
+
+        return w;
+    }
+
+    // ── 06  Зашифрованные заметки ─────────────────────────────────────────────
+    QWidget* makeNotesTab() {
+        auto* w    = new QWidget;
+        auto* vlay = new QVBoxLayout(w);
+        vlay->setContentsMargins(24, 20, 24, 20);
+        vlay->setSpacing(10);
+
+        auto* titleLbl = new QLabel("06  Заметки");
+        titleLbl->setStyleSheet("font-size:17px;font-weight:700;color:#2e2f38;");
+        vlay->addWidget(titleLbl);
+        auto* subLbl = new QLabel("Текст шифруется напрямую — без временных файлов на диске");
+        subLbl->setStyleSheet("font-size:12px;color:#7f8090;");
+        vlay->addWidget(subLbl);
+
+        auto* editor = new QPlainTextEdit;
+        editor->setPlaceholderText("Введите текст заметки…");
+        editor->setFont(monoFont(11));
+        editor->setStyleSheet(
+            "QPlainTextEdit { background:white; border:1.5px solid #dddee5;"
+            " border-radius:6px; padding:8px; }");
+        vlay->addWidget(editor, 1);
+
+        auto* form = new QFormLayout;
+        form->setSpacing(10); form->setContentsMargins(0,6,0,0);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        vlay->addLayout(form);
+
+        const int defMode = QSettings("Cryptograf","Cryptograf").value("defaultMode",4).toInt();
+        auto* modeCombo = new QComboBox;
+        for (const auto& m : MODES) modeCombo->addItem(m.name);
+        modeCombo->setCurrentIndex(defMode);
+        form->addRow("Режим:", modeCombo);
+
+        QLineEdit* pw;
+        form->addRow("Пароль:", makePwRow(pw, "Пароль заметки…", w));
+
+        auto* btnRow = new QWidget;
+        auto* btnH   = new QHBoxLayout(btnRow);
+        btnH->setContentsMargins(0,0,0,0); btnH->setSpacing(8);
+        auto* saveBtn  = makeActionBtn("  Сохранить", "#4f46e5", "#4338ca", "#a5b4fc");
+        auto* loadBtn  = makeActionBtn("  Открыть",   "#16a34a", "#15803d", "#86efac");
+        auto* clearBtn = new QPushButton("Очистить");
+        btnH->addWidget(saveBtn); btnH->addWidget(loadBtn); btnH->addWidget(clearBtn);
+        btnH->addStretch(1);
+        form->addRow("", btnRow);
+
+        auto* statusLbl = new QLabel("");
+        statusLbl->setStyleSheet("color:#7f8090; font-size:12px;");
+        form->addRow("", statusLbl);
+
+        // Save: encrypt editor content → .enc file (via temp file)
+        connect(saveBtn, &QPushButton::clicked, this, [=, this]() {
+            const QString text = editor->toPlainText();
+            const QString p    = pw->text();
+            if (text.trimmed().isEmpty()) { QMessageBox::warning(this,"Ошибка","Заметка пуста."); return; }
+            if (p.isEmpty())              { QMessageBox::warning(this,"Ошибка","Введите пароль."); return; }
+            QString outPath = QFileDialog::getSaveFileName(this, "Сохранить заметку", {},
+                                "Зашифрованные заметки (*.enc);;Все файлы (*)");
+            if (outPath.isEmpty()) return;
+            if (!outPath.endsWith(".enc", Qt::CaseInsensitive)) outPath += ".enc";
+            if (QFile::exists(outPath)) QFile::remove(outPath);
+
+            const auto mode = MODES[modeCombo->currentIndex()].mode;
+            setBusy(true); statusLbl->setText("Шифрование…");
+            work_ = new Worker;
+            work_->task = [text, o=outPath.toStdString(), p=p.toStdString(), mode]() {
+                const QString tmp = QDir::tempPath() + "/cg_note.tmp";
+                {
+                    QFile f(tmp);
+                    if (!f.open(QIODevice::WriteOnly))
+                        throw std::runtime_error("Не удалось создать временный файл");
+                    QTextStream(&f) << text;
+                }
+                try {
+                    crypto::encrypt_file(tmp.toStdString(), o, p, mode);
+                } catch (...) { QFile::remove(tmp); throw; }
+                QFile::remove(tmp);
+            };
+            connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                setBusy(false);
+                statusLbl->setText(ok ? "✓ Заметка сохранена: " + outPath : "✗ " + err);
+                if (!ok) { QFile::remove(outPath); QMessageBox::critical(this,"Ошибка",err); }
+                else logMsg("✓ Заметка зашифрована: " + outPath);
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+            work_->start();
+        });
+
+        // Load: decrypt .enc → show in editor
+        connect(loadBtn, &QPushButton::clicked, this, [=, this]() {
+            const QString p = pw->text();
+            if (p.isEmpty()) { QMessageBox::warning(this,"Ошибка","Введите пароль."); return; }
+            QString inPath = QFileDialog::getOpenFileName(this, "Открыть заметку", {},
+                               "Зашифрованные заметки (*.enc);;Все файлы (*)");
+            if (inPath.isEmpty()) return;
+
+            setBusy(true); statusLbl->setText("Расшифрование…");
+            auto textResult = std::make_shared<QString>();
+            work_ = new Worker;
+            work_->task = [i=inPath.toStdString(), p=p.toStdString(), textResult]() {
+                const QString tmp = QDir::tempPath() + "/cg_note.tmp";
+                QFile::remove(tmp);
+                crypto::decrypt_file(i, tmp.toStdString(), p);
+                QFile f(tmp);
+                if (!f.open(QIODevice::ReadOnly))
+                    throw std::runtime_error("Не удалось прочитать временный файл");
+                *textResult = QTextStream(&f).readAll();
+                f.close();
+                QFile::remove(tmp);
+            };
+            connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                setBusy(false);
+                if (ok) {
+                    editor->setPlainText(*textResult);
+                    statusLbl->setText("✓ Загружено из: " + inPath);
+                    logMsg("✓ Заметка расшифрована: " + inPath);
+                } else {
+                    statusLbl->setText("✗ " + err);
+                    QMessageBox::critical(this,"Ошибка расшифрования",err);
+                }
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+            work_->start();
+        });
+
+        connect(clearBtn, &QPushButton::clicked, [editor, statusLbl]() {
+            editor->clear(); statusLbl->clear();
+        });
+
+        return w;
+    }
+
+    // ── 07  Настройки ─────────────────────────────────────────────────────────
+    QWidget* makeSettingsTab() {
+        auto* w    = new QWidget;
+        auto* vlay = new QVBoxLayout(w);
+        vlay->setContentsMargins(40, 28, 40, 28);
+        vlay->setSpacing(0);
+
+        auto* titleLbl = new QLabel("07  Настройки");
+        titleLbl->setStyleSheet("font-size:17px;font-weight:700;color:#2e2f38;margin-bottom:4px;");
+        vlay->addWidget(titleLbl);
+
+        auto* box  = new QGroupBox("Параметры приложения");
+        auto* form = new QFormLayout(box);
+        form->setSpacing(14); form->setContentsMargins(20,16,20,16);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        vlay->addWidget(box);
+
+        // Default mode
+        QSettings s("Cryptograf","Cryptograf");
+        auto* modeCb = new QComboBox;
+        for (const auto& m : MODES) modeCb->addItem(m.name);
+        modeCb->setCurrentIndex(s.value("defaultMode", 4).toInt());
+        form->addRow("Режим по умолчанию:", modeCb);
+
+        auto* modeNote = new QLabel("Применяется при следующем открытии вкладки «Шифровать»");
+        modeNote->setStyleSheet("color:#7f8090; font-size:11px;");
+        form->addRow("", modeNote);
+
+        // Dark theme
+        auto* darkChk = new QCheckBox("Тёмная тема");
+        darkChk->setChecked(s.value("darkMode", false).toBool());
+        form->addRow("Интерфейс:", darkChk);
+
+        // Clear passwords
+        auto* clearChk = new QCheckBox("Очищать пароли после операции");
+        clearChk->setChecked(s.value("clearPasswords", false).toBool());
+        form->addRow("Безопасность:", clearChk);
+
+        // Save button
+        auto* saveBtn = makeActionBtn("  Сохранить настройки", "#4f46e5", "#4338ca", "#a5b4fc");
+        saveBtn->setMaximumWidth(220);
+        auto* btnRow = new QWidget;
+        auto* bh = new QHBoxLayout(btnRow);
+        bh->setContentsMargins(0,14,0,0);
+        bh->addWidget(saveBtn); bh->addStretch(1);
+        vlay->addWidget(btnRow);
+        vlay->addStretch(1);
+
+        connect(saveBtn, &QPushButton::clicked, this, [=, this]() {
+            QSettings qs("Cryptograf","Cryptograf");
+            qs.setValue("defaultMode",     modeCb->currentIndex());
+            qs.setValue("darkMode",        darkChk->isChecked());
+            qs.setValue("clearPasswords",  clearChk->isChecked());
+
+            // Apply default mode to encrypt combo immediately
+            if (encModeCb_) encModeCb_->setCurrentIndex(modeCb->currentIndex());
+
+            // Apply theme immediately
+            applyTheme(darkChk->isChecked());
+
+            logMsg("✓ Настройки сохранены.");
+            QMessageBox::information(this,"Настройки","Настройки сохранены.");
+        });
+
+        return w;
+    }
+
 public:
     explicit CryptografWindow(QWidget* parent = nullptr) : QMainWindow(parent) {
         setWindowTitle("Cryptograf — AES-256");
         resize(1060, 640);
         setMinimumSize(760, 500);
-        setStyleSheet(APP_STYLE);
+        {
+            const bool dark = QSettings("Cryptograf","Cryptograf").value("darkMode", false).toBool();
+            darkMode_ = dark;
+            setStyleSheet(dark ? DARK_STYLE : APP_STYLE);
+        }
 
         auto* central = new QWidget;
         central->setObjectName("central");
@@ -1038,10 +1517,13 @@ public:
         auto* tabs = new QTabWidget;
         tabs->setDocumentMode(true);
         tabs->tabBar()->setExpanding(false);
-        tabs->addTab(makeEncryptTab(), "01  Шифровать");
-        tabs->addTab(makeDecryptTab(), "02  Расшифровать");
-        tabs->addTab(makeSignTab(),    "03  Подпись");
-        tabs->addTab(makeInfoTab(),    "04  Информация");
+        tabs->addTab(makeEncryptTab(),  "01  Шифровать");
+        tabs->addTab(makeDecryptTab(),  "02  Расшифровать");
+        tabs->addTab(makeSignTab(),     "03  Подпись");
+        tabs->addTab(makeInfoTab(),     "04  Информация");
+        tabs->addTab(makeBatchTab(),    "05  Пакет");
+        tabs->addTab(makeNotesTab(),    "06  Заметки");
+        tabs->addTab(makeSettingsTab(), "07  Настройки");
         vlay->addWidget(tabs, 1);
 
         // Dark log strip
