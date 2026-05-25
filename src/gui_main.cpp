@@ -35,6 +35,7 @@
 
 #include "aes_cipher.hpp"
 #include "digital_sign.hpp"
+#include "diagram_widgets.hpp"
 
 // ── DropEdit ──────────────────────────────────────────────────────────────────
 class DropEdit : public QLineEdit {
@@ -199,14 +200,14 @@ QString buildFileInfo(const QString& path) {
 }
 
 
-// Build the right-side diagram pane with a pixmap diagram
-QWidget* makeDiagramPane(const QString& resourcePath, QWidget* parent) {
+// Wrap a diagram widget in the dot-grid background pane
+QWidget* wrapDiagram(QWidget* diagram, QWidget* parent) {
     auto* bg   = new DotGridWidget(parent);
     auto* vlay = new QVBoxLayout(bg);
     vlay->setContentsMargins(14, 14, 14, 14);
 
     auto* scroll = new QScrollArea(bg);
-    scroll->setWidgetResizable(false);
+    scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
     scroll->setStyleSheet(
         "QScrollArea { background: transparent; border: none; }"
@@ -217,23 +218,8 @@ QWidget* makeDiagramPane(const QString& resourcePath, QWidget* parent) {
         "QScrollBar::handle:horizontal { background:#c8cad5; border-radius:3px; min-width:16px; }"
         "QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal { width:0; }");
 
-    auto* lbl = new QLabel;
-    const QPixmap px(resourcePath);
-    // Display at logical 1x (PNG is 2x), so divide by 2 for crisp display
-    lbl->setPixmap(px);
-    lbl->setScaledContents(false);
-    // Scale down to 1x logical size
-    if (!px.isNull()) {
-        lbl->setFixedSize(px.width() / 2, px.height() / 2);
-        // Use device-pixel-ratio-aware approach: set the pixmap at 1x display size
-        QPixmap scaled = px.scaled(px.width() / 2, px.height() / 2,
-                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        lbl->setPixmap(scaled);
-        lbl->setFixedSize(scaled.size());
-    }
-    lbl->setStyleSheet("background: white; border-radius: 8px;");
-
-    scroll->setWidget(lbl);
+    diagram->setStyleSheet("background: white; border-radius: 8px;");
+    scroll->setWidget(diagram);
     vlay->addWidget(scroll);
     return bg;
 }
@@ -533,8 +519,15 @@ class CryptografWindow : public QMainWindow {
             work_->start();
         });
 
+        auto* diagram = new EncryptDiagramWidget;
+        connect(combo, &QComboBox::currentIndexChanged, [diagram](int i) {
+            if (i >= 0 && i < 9)
+                diagram->setMode(static_cast<crypto::Mode>(i));
+        });
+        diagram->setMode(MODES[4].mode); // CTR default
+
         splitter->addWidget(formPane);
-        splitter->addWidget(makeDiagramPane(":/diagrams/encrypt.png", splitter));
+        splitter->addWidget(wrapDiagram(diagram, splitter));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
@@ -607,7 +600,7 @@ class CryptografWindow : public QMainWindow {
         });
 
         splitter->addWidget(formPane);
-        splitter->addWidget(makeDiagramPane(":/diagrams/decrypt.png", splitter));
+        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/decrypt.svg"), splitter));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
@@ -754,7 +747,7 @@ class CryptografWindow : public QMainWindow {
         });
 
         splitter->addWidget(formPane);
-        splitter->addWidget(makeDiagramPane(":/diagrams/sign.png", splitter));
+        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/sign.svg"), splitter));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;
@@ -809,7 +802,7 @@ class CryptografWindow : public QMainWindow {
         });
 
         splitter->addWidget(formPane);
-        splitter->addWidget(makeDiagramPane(":/diagrams/info.png", splitter));
+        splitter->addWidget(wrapDiagram(new StaticSvgDiagram(":/diagrams/info.svg"), splitter));
         splitter->setStretchFactor(0, 0);
         splitter->setStretchFactor(1, 1);
         return splitter;

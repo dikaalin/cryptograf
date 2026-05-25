@@ -9,6 +9,24 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 find_package(OpenSSL 1.1 REQUIRED)
 
+# Qt6::Svg / Qt6::SvgWidgets — headers from extracted qt6-svg-dev deb,
+# runtime .so already installed; cmake config not available without sudo.
+set(_qt6svg_inc "/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6")
+set(_qt6svg_lib "/usr/lib/x86_64-linux-gnu")
+if(NOT WIN32 AND EXISTS "${_qt6svg_inc}/QtSvg/qsvgrenderer.h")
+    add_library(Qt6::Svg SHARED IMPORTED GLOBAL)
+    set_target_properties(Qt6::Svg PROPERTIES
+        IMPORTED_LOCATION "${_qt6svg_lib}/libQt6Svg.so.6"
+        INTERFACE_INCLUDE_DIRECTORIES "${_qt6svg_inc}/QtSvg;${_qt6svg_inc}"
+    )
+    add_library(Qt6::SvgWidgets SHARED IMPORTED GLOBAL)
+    set_target_properties(Qt6::SvgWidgets PROPERTIES
+        IMPORTED_LOCATION "${_qt6svg_lib}/libQt6SvgWidgets.so.6"
+        INTERFACE_INCLUDE_DIRECTORIES "${_qt6svg_inc}/QtSvgWidgets;${_qt6svg_inc}"
+    )
+    set(HAS_QT_SVG TRUE)
+endif()
+
 # ── Qt automation (handles moc, rcc, uic) ────────────────────────────────────
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -54,6 +72,10 @@ endif()
 qt_add_executable(cryptograf-gui ${GUI_SRCS})
 target_include_directories(cryptograf-gui PRIVATE src)
 target_link_libraries(cryptograf-gui PRIVATE Qt6::Widgets OpenSSL::SSL OpenSSL::Crypto)
+if(HAS_QT_SVG)
+    target_link_libraries(cryptograf-gui PRIVATE Qt6::Svg Qt6::SvgWidgets)
+    target_compile_definitions(cryptograf-gui PRIVATE HAS_QT_SVG=1)
+endif()
 
 if(WIN32)
     # Hide the console window and link runtime deps

@@ -1,9 +1,9 @@
 <RCC>
     <qresource prefix="/">
         <file>cryptograf.png</file>
-        <file>diagrams/encrypt.png</file>
-        <file>diagrams/decrypt.png</file>
-        <file>diagrams/sign.png</file>
-        <file>diagrams/info.png</file>
+        <file>diagrams/encrypt.svg</file>
+        <file>diagrams/decrypt.svg</file>
+        <file>diagrams/sign.svg</file>
+        <file>diagrams/info.svg</file>
     </qresource>
 </RCC>
