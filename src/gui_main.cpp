@@ -99,6 +99,25 @@ QFont monoFont(int pt) {
     return f;
 }
 
+// Returns 0 (empty) … 4 (very strong)
+static int calcStrength(const QString& pw) {
+    if (pw.isEmpty()) return 0;
+    int s = 0;
+    if (pw.length() >= 8)  s++;
+    if (pw.length() >= 12) s++;
+    bool lo = false, up = false, di = false, sp = false;
+    for (QChar c : pw) {
+        if      (c.isLower()) lo = true;
+        else if (c.isUpper()) up = true;
+        else if (c.isDigit()) di = true;
+        else                  sp = true;
+    }
+    if (lo && up)    s++;
+    if (di || sp)    s++;
+    if (di && sp)    s++;           // bonus: both digits and specials
+    return std::min(std::max(s, 1), 4);
+}
+
 QString toHex(const uint8_t* data, size_t n) {
     QString s; s.reserve(int(n) * 2);
     for (size_t i = 0; i < n; ++i)
@@ -501,7 +520,45 @@ class CryptografWindow : public QMainWindow {
         });
 
         QLineEdit *pw1, *pw2;
-        form->addRow("Пароль:",        makePwRow(pw1, "Введите пароль…",   inner));
+        form->addRow("Пароль:", makePwRow(pw1, "Введите пароль…", inner));
+
+        // ── Strength indicator ────────────────────────────────────────────────
+        static const char* STRENGTH_COLORS[] =
+            { "", "#ef4444", "#f97316", "#eab308", "#22c55e" };
+        static const char* STRENGTH_LABELS[] =
+            { "", "Очень слабый", "Слабый", "Средний", "Надёжный" };
+
+        auto* strRow = new QWidget(inner);
+        auto* strH   = new QHBoxLayout(strRow);
+        strH->setContentsMargins(0, 3, 0, 3);
+        strH->setSpacing(5);
+
+        std::array<QLabel*, 4> segs;
+        for (int i = 0; i < 4; ++i) {
+            segs[i] = new QLabel(strRow);
+            segs[i]->setFixedSize(36, 5);
+            segs[i]->setStyleSheet("background:#e0e1eb; border-radius:2px;");
+            strH->addWidget(segs[i]);
+        }
+        auto* strText = new QLabel("", strRow);
+        strText->setStyleSheet("color:#7f8090; font-size:11px; margin-left:2px;");
+        strH->addWidget(strText, 1);
+        form->addRow("Надёжность:", strRow);
+
+        connect(pw1, &QLineEdit::textChanged, [segs, strText](const QString& pw) {
+            const int sc = calcStrength(pw);
+            for (int i = 0; i < 4; ++i)
+                segs[i]->setStyleSheet(i < sc
+                    ? QString("background:%1; border-radius:2px;").arg(STRENGTH_COLORS[sc])
+                    : "background:#e0e1eb; border-radius:2px;");
+            strText->setText(pw.isEmpty() ? "" : STRENGTH_LABELS[sc]);
+            strText->setStyleSheet(sc > 0
+                ? QString("color:%1; font-size:11px; font-weight:600; margin-left:2px;")
+                      .arg(STRENGTH_COLORS[sc])
+                : "color:#7f8090; font-size:11px; margin-left:2px;");
+        });
+        // ─────────────────────────────────────────────────────────────────────
+
         form->addRow("Подтверждение:", makePwRow(pw2, "Повторите пароль…", inner));
 
         auto* btn = makeActionBtn("  Зашифровать", "#4f46e5", "#4338ca", "#a5b4fc");
