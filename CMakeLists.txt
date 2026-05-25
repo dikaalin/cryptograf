@@ -6,25 +6,30 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
-find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
 find_package(OpenSSL 1.1 REQUIRED)
 
-# Qt6::Svg / Qt6::SvgWidgets — headers from extracted qt6-svg-dev deb,
-# runtime .so already installed; cmake config not available without sudo.
-set(_qt6svg_inc "/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6")
-set(_qt6svg_lib "/usr/lib/x86_64-linux-gnu")
-if(NOT WIN32 AND EXISTS "${_qt6svg_inc}/QtSvg/qsvgrenderer.h")
-    add_library(Qt6::Svg SHARED IMPORTED GLOBAL)
-    set_target_properties(Qt6::Svg PROPERTIES
-        IMPORTED_LOCATION "${_qt6svg_lib}/libQt6Svg.so.6"
-        INTERFACE_INCLUDE_DIRECTORIES "${_qt6svg_inc}/QtSvg;${_qt6svg_inc}"
-    )
-    add_library(Qt6::SvgWidgets SHARED IMPORTED GLOBAL)
-    set_target_properties(Qt6::SvgWidgets PROPERTIES
-        IMPORTED_LOCATION "${_qt6svg_lib}/libQt6SvgWidgets.so.6"
-        INTERFACE_INCLUDE_DIRECTORIES "${_qt6svg_inc}/QtSvgWidgets;${_qt6svg_inc}"
-    )
-    set(HAS_QT_SVG TRUE)
+if(WIN32)
+    # On Windows (CI / aqtinstall) Qt6Svg is bundled — find it normally.
+    find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Svg SvgWidgets)
+else()
+    # On Linux the qt6-svg-dev package may not be installed (no sudo).
+    # We extracted the headers from the deb into /tmp/qt6svg-dev and
+    # the runtime .so is already present; create the targets manually.
+    find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets)
+    set(_qt6svg_inc "/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6")
+    set(_qt6svg_lib "/usr/lib/x86_64-linux-gnu")
+    if(NOT TARGET Qt6::Svg AND EXISTS "${_qt6svg_inc}/QtSvg/qsvgrenderer.h")
+        add_library(Qt6::Svg SHARED IMPORTED GLOBAL)
+        set_target_properties(Qt6::Svg PROPERTIES
+            IMPORTED_LOCATION "${_qt6svg_lib}/libQt6Svg.so.6"
+            INTERFACE_INCLUDE_DIRECTORIES "${_qt6svg_inc}/QtSvg;${_qt6svg_inc}"
+        )
+        add_library(Qt6::SvgWidgets SHARED IMPORTED GLOBAL)
+        set_target_properties(Qt6::SvgWidgets PROPERTIES
+            IMPORTED_LOCATION "${_qt6svg_lib}/libQt6SvgWidgets.so.6"
+            INTERFACE_INCLUDE_DIRECTORIES "${_qt6svg_inc}/QtSvgWidgets;${_qt6svg_inc}"
+        )
+    endif()
 endif()
 
 # ── Qt automation (handles moc, rcc, uic) ────────────────────────────────────
@@ -71,11 +76,7 @@ endif()
 
 qt_add_executable(cryptograf-gui ${GUI_SRCS})
 target_include_directories(cryptograf-gui PRIVATE src)
-target_link_libraries(cryptograf-gui PRIVATE Qt6::Widgets OpenSSL::SSL OpenSSL::Crypto)
-if(HAS_QT_SVG)
-    target_link_libraries(cryptograf-gui PRIVATE Qt6::Svg Qt6::SvgWidgets)
-    target_compile_definitions(cryptograf-gui PRIVATE HAS_QT_SVG=1)
-endif()
+target_link_libraries(cryptograf-gui PRIVATE Qt6::Widgets Qt6::Svg Qt6::SvgWidgets OpenSSL::SSL OpenSSL::Crypto)
 
 if(WIN32)
     # Hide the console window and link runtime deps
