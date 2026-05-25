@@ -172,81 +172,90 @@ int main(int argc, char* argv[]) {
 
     const std::string action = argv[1];
 
-    try {
-        if (action == "info") {
-            if (argc != 3) { print_usage(argv[0]); return 1; }
-            return cmd_info(argv[2]);
-        }
-
-        if (action == "encrypt") {
-            if (argc != 5) { print_usage(argv[0]); return 1; }
-
-            const auto mode     = crypto::mode_from_string(argv[2]);
-            const std::string in  = argv[3];
-            const std::string out = argv[4];
-
-            if (!fs::exists(in)) {
-                std::cerr << "Input file not found: " << in << '\n';
-                return 1;
-            }
-            if (fs::exists(out)) {
-                std::cerr << "Output file already exists: " << out
-                          << " (remove it first)\n";
-                return 1;
-            }
-
-            print_banner();
-            std::cout << "Mode   : AES-256-" << crypto::mode_to_string(mode) << '\n'
-                      << "Input  : " << in  << " (" << fs::file_size(in) << " bytes)\n"
-                      << "Output : " << out << "\n\n";
-
-            const auto pw  = read_password("Enter password: ");
-            const auto pw2 = read_password("Confirm password: ");
-            if (pw != pw2) { std::cerr << "Passwords do not match.\n"; return 1; }
-            if (pw.empty()) { std::cerr << "Password must not be empty.\n"; return 1; }
-
-            std::cout << "Encrypting…\n";
-            crypto::encrypt_file(in, out, pw, mode);
-            std::cout << "Done. Encrypted file: " << out
-                      << " (" << fs::file_size(out) << " bytes)\n";
-            return 0;
-        }
-
-        if (action == "decrypt") {
-            if (argc != 4) { print_usage(argv[0]); return 1; }
-
-            const std::string in  = argv[2];
-            const std::string out = argv[3];
-
-            if (!fs::exists(in)) {
-                std::cerr << "Input file not found: " << in << '\n';
-                return 1;
-            }
-            if (fs::exists(out)) {
-                std::cerr << "Output file already exists: " << out
-                          << " (remove it first)\n";
-                return 1;
-            }
-
-            print_banner();
-            const auto pw = read_password("Enter password: ");
-
-            std::cout << "Decrypting…\n";
-            crypto::decrypt_file(in, out, pw);
-            std::cout << "Done. Decrypted file: " << out
-                      << " (" << fs::file_size(out) << " bytes)\n";
-            return 0;
-        }
-
-        std::cerr << "Unknown command: " << action << '\n';
-        print_usage(argv[0]);
-        return 1;
-
-    } catch (const std::exception& ex) {
-        std::cerr << "Error: " << ex.what() << '\n';
-        // Remove partial output if decrypt/encrypt fails mid-stream
-        if (argc >= 4 && fs::exists(argv[argc - 1]))
-            fs::remove(argv[argc - 1]);
-        return 1;
+    if (action == "info") {
+        if (argc != 3) { print_usage(argv[0]); return 1; }
+        return cmd_info(argv[2]);
     }
+
+    if (action == "encrypt") {
+        if (argc != 5) { print_usage(argv[0]); return 1; }
+
+        crypto::Mode mode;
+        try { mode = crypto::mode_from_string(argv[2]); }
+        catch (const std::exception& ex) {
+            std::cerr << "Error: " << ex.what() << '\n';
+            return 1;
+        }
+
+        const std::string in  = argv[3];
+        const std::string out = argv[4];
+
+        if (!fs::exists(in)) {
+            std::cerr << "Input file not found: " << in << '\n';
+            return 1;
+        }
+        if (fs::exists(out)) {
+            std::cerr << "Output file already exists: " << out
+                      << " (remove it first)\n";
+            return 1;
+        }
+
+        print_banner();
+        std::cout << "Mode   : AES-256-" << crypto::mode_to_string(mode) << '\n'
+                  << "Input  : " << in  << " (" << fs::file_size(in) << " bytes)\n"
+                  << "Output : " << out << "\n\n";
+
+        const auto pw  = read_password("Enter password: ");
+        const auto pw2 = read_password("Confirm password: ");
+        if (pw != pw2) { std::cerr << "Passwords do not match.\n"; return 1; }
+        if (pw.empty()) { std::cerr << "Password must not be empty.\n"; return 1; }
+
+        std::cout << "Encrypting…\n";
+        try {
+            crypto::encrypt_file(in, out, pw, mode);
+        } catch (const std::exception& ex) {
+            std::cerr << "Error: " << ex.what() << '\n';
+            if (fs::exists(out)) fs::remove(out);  // remove partial output
+            return 1;
+        }
+        std::cout << "Done. Encrypted file: " << out
+                  << " (" << fs::file_size(out) << " bytes)\n";
+        return 0;
+    }
+
+    if (action == "decrypt") {
+        if (argc != 4) { print_usage(argv[0]); return 1; }
+
+        const std::string in  = argv[2];
+        const std::string out = argv[3];
+
+        if (!fs::exists(in)) {
+            std::cerr << "Input file not found: " << in << '\n';
+            return 1;
+        }
+        if (fs::exists(out)) {
+            std::cerr << "Output file already exists: " << out
+                      << " (remove it first)\n";
+            return 1;
+        }
+
+        print_banner();
+        const auto pw = read_password("Enter password: ");
+
+        std::cout << "Decrypting…\n";
+        try {
+            crypto::decrypt_file(in, out, pw);
+        } catch (const std::exception& ex) {
+            std::cerr << "Error: " << ex.what() << '\n';
+            if (fs::exists(out)) fs::remove(out);  // remove partial output
+            return 1;
+        }
+        std::cout << "Done. Decrypted file: " << out
+                  << " (" << fs::file_size(out) << " bytes)\n";
+        return 0;
+    }
+
+    std::cerr << "Unknown command: " << action << '\n';
+    print_usage(argv[0]);
+    return 1;
 }

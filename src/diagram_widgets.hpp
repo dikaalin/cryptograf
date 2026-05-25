@@ -39,9 +39,10 @@ class EncryptDiagramWidget : public QWidget {
                              bool iv, bool a, bool par, bool last,
                              const QString& desc, int y)
     {
-        const bool isActive = (label == "GCM/CCM") ? (active == "GCM" || active == "CCM")
-                            : (label == "SIV")      ? (active == "SIV" || active == "GCM-SIV")
-                            :                          (label == active);
+        const bool isActive = (label == "GCM/CCM")     ? (active == "GCM" || active == "CCM")
+                            : (label == "SIV")          ? (active == "SIV" || active == "GCM-SIV")
+                            : (label == "CBC/CFB/OFB")  ? (active == "CBC" || active == "CFB" || active == "OFB")
+                            :                              (label == active);
         const QString lc = isActive ? (a ? "#4f46e5" : "#d97706") : "#374151";
         const QString bg = isActive ? (a ? "#eef2ff" : "#fffbeb") : QString();
         QString row;
@@ -83,7 +84,9 @@ class EncryptDiagramWidget : public QWidget {
         // IV badge
         const QString ivBadgeFill = needsIv ? "#dbeafe" : "#f1f5f9";
         const QString ivBadgeText = needsIv ? "#1d4ed8" : "#94a3b8";
-        const QString ivBadgeLbl  = needsIv ? "IV 16B (random)" : "нет IV (ECB)";
+        const QString ivBadgeLbl  = needsIv ? "IV 16B (random)"
+                                   : (mode == crypto::Mode::ECB ? "нет IV (ECB)"
+                                                                 : "нет nonce (SIV)");
 
         // AEAD/Non-AEAD box highlight
         const QString aeadBg   = aead ? "#f0fdf4" : "#f8fafc";
@@ -100,11 +103,11 @@ class EncryptDiagramWidget : public QWidget {
 
         // matrix rows
         const QString rows =
-            matrixRow("ECB",     modeN, false, false, true,  false, "Детерминированный, небезопасен",        322) +
-            matrixRow("CBC",     modeN, true,  false, false, false, "Последовательный, случайный IV",        341) +
-            matrixRow("CTR",     modeN, true,  false, true,  false, "Параллелизуемый поток",                 360) +
-            matrixRow("GCM/CCM", modeN, true,  true,  true,  false, "NIST AEAD, 12-байт nonce",              379) +
-            matrixRow("SIV",     modeN, false, true,  true,  true,  "Устойчив к повтору nonce, RFC 5297/8452", 398);
+            matrixRow("ECB",         modeN, false, false, true,  false, "Детерминированный, небезопасен",          322) +
+            matrixRow("CBC/CFB/OFB", modeN, true,  false, false, false, "Последовательный режим, случайный IV",    341) +
+            matrixRow("CTR",         modeN, true,  false, true,  false, "Параллелизуемый поток",                   360) +
+            matrixRow("GCM/CCM",     modeN, true,  true,  true,  false, "NIST AEAD, 12-байт nonce",                379) +
+            matrixRow("SIV",         modeN, false, true,  true,  true,  "Устойчив к повтору nonce, RFC 5297/8452", 398);
 
         QString svg;
         svg.reserve(8000);

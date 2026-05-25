@@ -32,6 +32,7 @@
 #include <QWidget>
 #include <cstring>
 #include <functional>
+#include <memory>
 
 #include "aes_cipher.hpp"
 #include "digital_sign.hpp"
@@ -150,7 +151,11 @@ QWidget* makeCopyRow(QLineEdit* display, std::function<QString()> fullTextFn, QW
     return row;
 }
 
-struct EncParts { QByteArray ciphertext, tag; bool is_aead; QString mode_name; };
+struct EncParts {
+    QByteArray ciphertext, tag, salt, iv;
+    bool       is_aead;
+    QString    mode_name;
+};
 
 std::optional<EncParts> parseEncFile(const QString& path) {
     QFile f(path);
@@ -167,16 +172,19 @@ std::optional<EncParts> parseEncFile(const QString& path) {
     f.seek(hsz);
     QByteArray ct = f.read(fsz - hsz - tsz);
     f.seek(fsz - tsz);
-    return EncParts{ct, f.read(tsz), crypto::mode_is_aead(mode),
-                    QString::fromStdString(crypto::mode_to_string(mode))};
+    return EncParts{
+        ct,
+        f.read(tsz),
+        QByteArray(reinterpret_cast<const char*>(hdr.salt), crypto::SALT_LEN),
+        QByteArray(reinterpret_cast<const char*>(hdr.iv),   crypto::IV_LEN),
+        crypto::mode_is_aead(mode),
+        QString::fromStdString(crypto::mode_to_string(mode))
+    };
 }
 
 QString buildFileInfo(const QString& path) {
     auto p = parseEncFile(path);
     if (!p) return "Не удалось разобрать файл .enc.";
-    QFile f(path); f.open(QIODevice::ReadOnly);
-    crypto::FileHeader hdr{};
-    f.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
     return QString(
         "Файл         : %1\n"
         "Режим        : AES-256-%2\n"
@@ -190,8 +198,8 @@ QString buildFileInfo(const QString& path) {
         .arg(path).arg(p->mode_name)
         .arg(p->is_aead ? "да" : "нет")
         .arg(p->ciphertext.size())
-        .arg(toHex(hdr.salt, crypto::SALT_LEN))
-        .arg(toHex(hdr.iv,   crypto::IV_LEN))
+        .arg(QString::fromLatin1(p->salt.toHex()))
+        .arg(QString::fromLatin1(p->iv.toHex()))
         .arg(p->is_aead ? "Тег AEAD     " : "HMAC-SHA256  ")
         .arg(QString::fromLatin1(p->tag.toHex()))
         .arg(crypto::PBKDF2_ITERATIONS)
@@ -724,7 +732,7 @@ class CryptografWindow : public QMainWindow {
             if (!QFile::exists(key)) { QMessageBox::warning(this,"Ошибка","Ключ не найден."); return; }
             setBusy(true); logMsg("Проверка подписи: " + in);
             work_ = new Worker;
-            bool* result = new bool(false);
+            auto result = std::make_shared<bool>(false);
             work_->task = [i=in.toStdString(),s=sig.toStdString(),k=key.toStdString(),result]() {
                 *result = crypto::verify_file(i,s,k);
             };
@@ -741,7 +749,7 @@ class CryptografWindow : public QMainWindow {
                             "Подпись недействительна!\nФайл мог быть изменён или используется другой ключ.");
                     }
                 } else { logMsg("✗ "+err); QMessageBox::critical(this,"Ошибка проверки",err); }
-                delete result; work_->deleteLater(); work_ = nullptr;
+                work_->deleteLater(); work_ = nullptr;
             }, Qt::QueuedConnection);
             work_->start();
         });
