@@ -769,8 +769,8 @@ class CryptografWindow : public QMainWindow {
 
         auto* diagram = new EncryptDiagramWidget;
         connect(combo, &QComboBox::currentIndexChanged, [diagram](int i) {
-            if (i >= 0 && i < 9)
-                diagram->setMode(static_cast<crypto::Mode>(i));
+            if (i >= 0 && i < MODE_COUNT)
+                diagram->setMode(MODES[i].mode);
         });
         diagram->setMode(MODES[4].mode); // CTR default
 

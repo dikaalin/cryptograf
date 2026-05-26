@@ -14,13 +14,13 @@ CXXFLAGS := -std=c++20 -O2 -Wall -Wextra -Wpedantic
 LDFLAGS  := -lssl -lcrypto
 
 MOC      := /usr/lib/qt6/libexec/moc
-QT_FLAGS := $(shell pkg-config --cflags Qt6Widgets)
-QT_LIBS  := $(shell pkg-config --libs Qt6Widgets)
+QT_FLAGS := $(shell pkg-config --cflags Qt6Widgets) -I/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6 -I/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6/QtSvg
+QT_LIBS  := $(shell pkg-config --libs Qt6Widgets) /tmp/qt6svg-dev/usr/lib/x86_64-linux-gnu/libQt6Svg.so.6
 
 SRCS     := src/main.cpp src/aes_cipher.cpp src/gcmsiv.cpp
 BIN      := cryptograf
 
-GUI_SRCS := src/gui_main.cpp src/aes_cipher.cpp src/gcmsiv.cpp
+GUI_SRCS := src/gui_main.cpp src/aes_cipher.cpp src/gcmsiv.cpp src/digital_sign.cpp
 GUI_BIN  := cryptograf-gui
 
 .PHONY: all gui clean test cmake-build cmake-clean
