@@ -61,7 +61,7 @@ class EncryptDiagramWidget : public QWidget {
                "<text x=\"310\" y=\"" + yS + "\" font-size=\"9\" fill=\"" + cc(par) +
                "\" text-anchor=\"middle\">" + check(par) + "</text>"
                "<text x=\"430\" y=\"" + yS + "\" font-size=\"8.5\" fill=\"#64748b\""
-               " text-anchor=\"middle\">" + desc + "</text>";
+               " text-anchor=\"middle\" clip-path=\"url(#descClip)\">" + desc + "</text>";
         if (!last)
             row += "<line x1=\"28\" y1=\"" + QString::number(y+6) +
                    "\" x2=\"552\" y2=\"" + QString::number(y+6) +
@@ -103,11 +103,11 @@ class EncryptDiagramWidget : public QWidget {
 
         // matrix rows
         const QString rows =
-            matrixRow("ECB",         modeN, false, false, true,  false, "Детерминированный, небезопасен",          322) +
-            matrixRow("CBC/CFB/OFB", modeN, true,  false, false, false, "Последовательный режим, случайный IV",    341) +
-            matrixRow("CTR",         modeN, true,  false, true,  false, "Параллелизуемый поток",                   360) +
-            matrixRow("GCM/CCM",     modeN, true,  true,  true,  false, "NIST AEAD, 12-байт nonce",                379) +
-            matrixRow("SIV",         modeN, false, true,  true,  true,  "Устойчив к повтору nonce, RFC 5297/8452", 398);
+            matrixRow("ECB",         modeN, false, false, true,  false, "Нет IV, небезопасен",     332) +
+            matrixRow("CBC/CFB/OFB", modeN, true,  false, false, false, "Послед., случайный IV",   351) +
+            matrixRow("CTR",         modeN, true,  false, true,  false, "Параллелизуемый поток",   370) +
+            matrixRow("GCM/CCM",     modeN, true,  true,  true,  false, "NIST AEAD, nonce 12B",    389) +
+            matrixRow("SIV",         modeN, false, true,  true,  true,  "Устойч. к повтору nonce", 408);
 
         QString svg;
         svg.reserve(8000);
@@ -120,7 +120,11 @@ class EncryptDiagramWidget : public QWidget {
             "<path d=\"M0,0 L8,3.5 L0,7 Z\" fill=\"#94a3b8\"/></marker>"
             "<filter id=\"shadow\" x=\"-5%\" y=\"-5%\" width=\"110%\" height=\"115%\">"
             "<feDropShadow dx=\"0\" dy=\"1\" stdDeviation=\"2\" flood-color=\"#00000018\"/>"
-            "</filter></defs>"
+            "</filter>"
+            "<clipPath id=\"descClip\">"
+            "<rect x=\"355\" y=\"318\" width=\"210\" height=\"102\"/>"
+            "</clipPath>"
+            "</defs>"
 
             // FILE FORMAT STRIP
             "<text x=\"16\" y=\"20\" font-size=\"9\" fill=\"#94a3b8\" font-weight=\"700\""
@@ -241,7 +245,7 @@ class EncryptDiagramWidget : public QWidget {
             // MODE MATRIX
             "<text x=\"16\" y=\"288\" font-size=\"9\" fill=\"#94a3b8\" font-weight=\"700\""
             " letter-spacing=\"1.2\">МАТРИЦА РЕЖИМОВ</text>"
-            "<rect x=\"16\" y=\"296\" width=\"548\" height=\"116\" rx=\"8\" fill=\"white\""
+            "<rect x=\"16\" y=\"296\" width=\"548\" height=\"120\" rx=\"8\" fill=\"white\""
             " stroke=\"#e2e8f0\" stroke-width=\"1\" filter=\"url(#shadow)\"/>"
             "<rect x=\"16\" y=\"296\" width=\"548\" height=\"22\" rx=\"8\" fill=\"#f8fafc\"/>"
             "<rect x=\"16\" y=\"306\" width=\"548\" height=\"12\" fill=\"#f8fafc\"/>"
