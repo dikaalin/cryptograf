@@ -73,7 +73,9 @@ static void print_mode_info() {
         "  CCM      Counter with CBC-MAC      NIST SP 800-38C, 12-byte nonce, full-buffer(*)\n"
         "  GCM-SIV  GCM-SIV (RFC 8452)       nonce-misuse resistant, deterministic\n"
         "  SIV      AES-SIV (RFC 5297)        nonce-misuse resistant, deterministic, no nonce\n"
-        "           Note: CCM-SIV is not a standardised mode; SIV (RFC 5297) is used instead.\n\n"
+        "           Note: CCM-SIV is not a standardised mode; SIV (RFC 5297) is used instead.\n"
+        "  EAX      EAX (NIST proposal)       CTR+OMAC two-pass AEAD; requires OpenSSL >= 3.0\n"
+        "  OCB      OCB3 (RFC 7253)           single-pass parallelisable AEAD, 12-byte nonce\n\n"
         "(*) CCM buffers the entire file in memory during encryption/decryption.\n\n";
 }
 
@@ -123,7 +125,7 @@ static int cmd_info(const std::string& path) {
         std::cerr << "Not a valid v3 .enc file (wrong magic bytes).\n";
         return 1;
     }
-    if (hdr.mode > static_cast<uint8_t>(crypto::Mode::SIV)) {
+    if (hdr.mode > static_cast<uint8_t>(crypto::Mode::OCB)) {
         std::cerr << "Unknown mode byte in file header.\n";
         return 1;
     }

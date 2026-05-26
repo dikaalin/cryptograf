@@ -43,6 +43,8 @@ Mode mode_from_string(std::string_view s) {
     if (up == "CCM")                        return Mode::CCM;
     if (up == "GCM-SIV" || up == "GCMSIV") return Mode::GCM_SIV;
     if (up == "SIV")                        return Mode::SIV;
+    if (up == "EAX")                        return Mode::EAX;
+    if (up == "OCB")                        return Mode::OCB;
     throw std::invalid_argument("Unknown mode: " + std::string(s));
 }
 
@@ -57,6 +59,8 @@ std::string mode_to_string(Mode m) {
         case Mode::CCM:     return "CCM";
         case Mode::GCM_SIV: return "GCM-SIV";
         case Mode::SIV:     return "SIV";
+        case Mode::EAX:     return "EAX";
+        case Mode::OCB:     return "OCB";
     }
     return "???";
 }
@@ -77,7 +81,9 @@ static size_t nonce_len(Mode m) {
     switch (m) {
         case Mode::GCM:
         case Mode::CCM:
-        case Mode::GCM_SIV: return 12;
+        case Mode::GCM_SIV:
+        case Mode::EAX:
+        case Mode::OCB:     return 12;
         default:             return 0;
     }
 }
@@ -111,6 +117,8 @@ static CipherRef fetch_cipher(const char* name, Mode m) {
         std::string msg = std::string(name) + " is not available";
         if (m == Mode::GCM_SIV)
             msg += " — requires OpenSSL ≥ 3.2 (installed: " OPENSSL_VERSION_TEXT ")";
+        else if (m == Mode::EAX)
+            msg += " — requires OpenSSL ≥ 3.0 with EAX provider (installed: " OPENSSL_VERSION_TEXT ")";
         throw std::runtime_error(msg);
     }
     return CipherRef{c, true};
@@ -127,6 +135,8 @@ static CipherRef make_cipher(Mode m) {
         case Mode::CCM:     return static_ref(EVP_aes_256_ccm());
         case Mode::GCM_SIV: throw std::logic_error("GCM_SIV is handled by gcmsiv:: directly");
         case Mode::SIV:     return fetch_cipher("AES-256-SIV", m);
+        case Mode::EAX:     return fetch_cipher("AES-256-EAX", m);
+        case Mode::OCB:     return static_ref(EVP_aes_256_ocb());
     }
     throw std::runtime_error("Unknown mode");
 }
@@ -685,7 +695,7 @@ void decrypt_file(const std::string& in_path,
     std::memcpy(&hdr, raw_hdr, sizeof(hdr));
     if (std::memcmp(hdr.magic, FileHeader::MAGIC, 4) != 0)
         throw std::runtime_error("Invalid file header — not a v3 .enc file");
-    if (hdr.mode > static_cast<uint8_t>(Mode::SIV))
+    if (hdr.mode > static_cast<uint8_t>(Mode::OCB))
         throw std::runtime_error("Unknown cipher mode in file header");
 
     const auto mode = static_cast<Mode>(hdr.mode);
@@ -975,7 +985,7 @@ void decrypt_dir(const std::string& in_path,
     std::memcpy(&hdr, raw_hdr, sizeof(hdr));
     if (std::memcmp(hdr.magic, FileHeader::FOLDER_MAGIC, 4) != 0)
         throw std::runtime_error("Not a folder archive (.enc folder)");
-    if (hdr.mode > static_cast<uint8_t>(Mode::SIV))
+    if (hdr.mode > static_cast<uint8_t>(Mode::OCB))
         throw std::runtime_error("Unknown cipher mode in file header");
 
     const auto mode = static_cast<Mode>(hdr.mode);

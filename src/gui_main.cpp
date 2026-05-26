@@ -280,8 +280,10 @@ static const ModeInfo MODES[] = {
     {"CCM",     crypto::Mode::CCM,     "Counter with CBC-MAC — NIST SP 800-38C (AEAD)"},
     {"GCM-SIV", crypto::Mode::GCM_SIV, "GCM-SIV RFC 8452 — устойчив к повтору nonce (AEAD)"},
     {"SIV",     crypto::Mode::SIV,     "AES-SIV RFC 5297 — детерминированный, без nonce (AEAD)"},
+    {"EAX",     crypto::Mode::EAX,     "EAX — CTR+OMAC двухпроходный AEAD (OpenSSL ≥ 3.0)"},
+    {"OCB",     crypto::Mode::OCB,     "OCB3 RFC 7253 — параллельный однопроходный AEAD"},
 };
-static constexpr int MODE_COUNT = 9;
+static constexpr int MODE_COUNT = 11;
 
 } // namespace
 
@@ -579,7 +581,7 @@ class CryptografWindow : public QMainWindow {
         desc->setWordWrap(true);
         desc->setStyleSheet("color:#7f8090;font-size:11px;padding:2px 0;");
         connect(combo, &QComboBox::currentIndexChanged, [desc](int i) {
-            if (i >= 0 && i < 9) desc->setText(MODES[i].desc);
+            if (i >= 0 && i < MODE_COUNT) desc->setText(MODES[i].desc);
         });
         form->addRow("", desc);
 

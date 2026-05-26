@@ -24,6 +24,8 @@ enum class Mode : uint8_t {
     GCM_SIV = 7,  // GCM-SIV (RFC 8452)          — nonce-misuse-resistant; requires OpenSSL ≥ 3.2
     SIV     = 8,  // AES-SIV (RFC 5297)           — nonce-misuse-resistant, deterministic, no nonce
                   //   Note: "CCM-SIV" is not a standardised mode; SIV (RFC 5297) is used instead.
+    EAX     = 9,  // EAX (NIST proposal)           — nonce-based, CTR+OMAC two-pass; OpenSSL ≥ 3.0
+    OCB     = 10, // OCB3 (RFC 7253)               — nonce-based, single-pass, parallelisable
 };
 // clang-format on
 
