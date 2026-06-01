@@ -33,6 +33,7 @@
 #include <QTabWidget>
 #include <QTextStream>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -163,6 +164,26 @@ QWidget* makePwRow(QLineEdit*& edit, const QString& hint, QWidget* parent) {
         edit->setEchoMode(on ? QLineEdit::Normal : QLineEdit::Password);
     });
     h->addWidget(edit); h->addWidget(eye);
+    return row;
+}
+
+QWidget* makeKeyFileRow(DropEdit*& edit, QWidget* parent) {
+    auto* row = new QWidget(parent);
+    auto* h   = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0); h->setSpacing(6);
+    edit = new DropEdit(row);
+    edit->setPlaceholderText("Необязательно — перетащите файл-ключ…");
+    auto* btn = new QPushButton("Обзор…", row);
+    btn->setFixedWidth(76);
+    auto* clr = new QPushButton("✕", row);
+    clr->setFixedWidth(26);
+    clr->setObjectName("eyeBtn");
+    QObject::connect(btn, &QPushButton::clicked, [edit, parent]() {
+        QString p = QFileDialog::getOpenFileName(parent, "Выбрать файл-ключ");
+        if (!p.isEmpty()) edit->setText(p);
+    });
+    QObject::connect(clr, &QPushButton::clicked, [edit]() { edit->clear(); });
+    h->addWidget(edit); h->addWidget(btn); h->addWidget(clr);
     return row;
 }
 
@@ -659,6 +680,19 @@ class CryptografWindow : public QMainWindow {
 
         form->addRow("Подтверждение:", makePwRow(pw2, "Повторите пароль…", inner));
 
+        DropEdit* keyfileEdit = nullptr;
+        form->addRow("Файл-ключ:", makeKeyFileRow(keyfileEdit, inner));
+        auto* kfNote = new QLabel("Необязательно. Если указан — требуется при расшифровании.");
+        kfNote->setWordWrap(true);
+        kfNote->setStyleSheet("color:#7f8090;font-size:11px;padding:2px 0;");
+        form->addRow("", kfNote);
+
+        auto* secDelChk = new QCheckBox("Безопасно удалить исходный файл после шифрования");
+        form->addRow("", secDelChk);
+        connect(typeCombo, &QComboBox::currentIndexChanged, [secDelChk](int i) {
+            secDelChk->setEnabled(i == 0);
+        });
+
         auto* btn = makeActionBtn("  Зашифровать", "#4f46e5", "#4338ca", "#a5b4fc");
         form->addRow("", btn);
 
@@ -721,20 +755,23 @@ class CryptografWindow : public QMainWindow {
             setBusy(true);
             logMsg(QString("Шифрование [%1]: %2  →  %3").arg(combo->currentText(), in, out));
             work_ = new Worker;
-            const auto mode = MODES[mi].mode;
+            const auto mode    = MODES[mi].mode;
+            const auto kfPath  = keyfileEdit->text().trimmed();
+            const bool doSecDel = secDelChk->isChecked() && !isDir;
             if (isDir) {
                 work_->task = [i=in.toStdString(),o=out.toStdString(),
-                                p=p1.toStdString(),mode,w=work_]() {
-                    crypto::encrypt_dir(i, o, p, mode, [w](int64_t d, int64_t t) {
+                                p=p1.toStdString(),kf=kfPath.toStdString(),mode,w=work_]() {
+                    crypto::encrypt_dir(i, o, p, mode, kf, [w](int64_t d, int64_t t) {
                         w->reportProgress(d, t);
                     });
                 };
             } else {
                 work_->task = [i=in.toStdString(),o=out.toStdString(),
-                                p=p1.toStdString(),mode,w=work_]() {
-                    crypto::encrypt_file(i, o, p, mode, [w](int64_t d, int64_t t) {
+                                p=p1.toStdString(),kf=kfPath.toStdString(),mode,doSecDel,w=work_]() {
+                    crypto::encrypt_file(i, o, p, mode, kf, [w](int64_t d, int64_t t) {
                         w->reportProgress(d, t);
                     });
+                    if (doSecDel) crypto::secure_delete(i);
                 };
             }
             connect(work_, &Worker::progress, progBar, [progBar](qint64 d, qint64 t) {
@@ -838,6 +875,13 @@ class CryptografWindow : public QMainWindow {
 
         QLineEdit* pw;
         form->addRow("Пароль:", makePwRow(pw, "Введите пароль…", formPane));
+
+        DropEdit* dkeyfileEdit = nullptr;
+        form->addRow("Файл-ключ:", makeKeyFileRow(dkeyfileEdit, formPane));
+        auto* dkfNote = new QLabel("Если использовался при шифровании — обязателен.");
+        dkfNote->setStyleSheet("color:#7f8090;font-size:11px;padding:2px 0;");
+        form->addRow("", dkfNote);
+
         auto* btn = makeActionBtn("  Расшифровать", "#16a34a", "#15803d", "#86efac");
         form->addRow("", btn);
 
@@ -874,17 +918,18 @@ class CryptografWindow : public QMainWindow {
             setBusy(true);
             logMsg(QString("Расшифрование: %1  →  %2").arg(in, out));
             work_ = new Worker;
+            const auto dkfPath = dkeyfileEdit->text().trimmed();
             if (isFolder) {
                 work_->task = [i=in.toStdString(),o=out.toStdString(),
-                                pw=p.toStdString(),w=work_]() {
-                    crypto::decrypt_dir(i, o, pw, [w](int64_t d, int64_t t) {
+                                pw=p.toStdString(),kf=dkfPath.toStdString(),w=work_]() {
+                    crypto::decrypt_dir(i, o, pw, kf, [w](int64_t d, int64_t t) {
                         w->reportProgress(d, t);
                     });
                 };
             } else {
                 work_->task = [i=in.toStdString(),o=out.toStdString(),
-                                pw=p.toStdString(),w=work_]() {
-                    crypto::decrypt_file(i, o, pw, [w](int64_t d, int64_t t) {
+                                pw=p.toStdString(),kf=dkfPath.toStdString(),w=work_]() {
+                    crypto::decrypt_file(i, o, pw, kf, [w](int64_t d, int64_t t) {
                         w->reportProgress(d, t);
                     });
                 };
@@ -1500,6 +1545,138 @@ class CryptografWindow : public QMainWindow {
         return w;
     }
 
+    // ── 08  Целостность файлов ────────────────────────────────────────────────
+    QWidget* makeHashTab() {
+        auto* w    = new QWidget;
+        auto* vlay = new QVBoxLayout(w);
+        vlay->setContentsMargins(24, 20, 24, 20);
+        vlay->setSpacing(10);
+
+        auto* titleLbl = new QLabel("08  Целостность");
+        titleLbl->setStyleSheet("font-size:17px;font-weight:700;color:#2e2f38;");
+        vlay->addWidget(titleLbl);
+        auto* subLbl = new QLabel("Вычисление и проверка контрольных сумм файлов (SHA-256, BLAKE2b-512)");
+        subLbl->setStyleSheet("font-size:12px;color:#7f8090;");
+        vlay->addWidget(subLbl);
+
+        auto* form = new QFormLayout;
+        form->setSpacing(10); form->setContentsMargins(0, 8, 0, 0);
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+        vlay->addLayout(form);
+
+        DropEdit* fileEdit;
+        form->addRow("Файл:", makeFileRow(fileEdit, true, w));
+
+        auto* sha256Display = new QLineEdit;
+        sha256Display->setReadOnly(true); sha256Display->setFont(monoFont(9));
+        sha256Display->setPlaceholderText("—");
+        auto* sha256Row = makeCopyRow(sha256Display, [sha256Display]{ return sha256Display->text(); }, w);
+        form->addRow("SHA-256:", sha256Row);
+
+        auto* blake2Display = new QLineEdit;
+        blake2Display->setReadOnly(true); blake2Display->setFont(monoFont(9));
+        blake2Display->setPlaceholderText("—");
+        auto* blake2Row = makeCopyRow(blake2Display, [blake2Display]{ return blake2Display->text(); }, w);
+        form->addRow("BLAKE2b-512:", blake2Row);
+
+        auto* calcBtn = makeActionBtn("  Вычислить хэши", "#4f46e5", "#4338ca", "#a5b4fc");
+        form->addRow("", calcBtn);
+
+        auto* hashProgBar = new QProgressBar;
+        hashProgBar->setRange(0, 0);
+        hashProgBar->setVisible(false); hashProgBar->setTextVisible(false);
+        form->addRow("", hashProgBar);
+
+        // ── Verify section ────────────────────────────────────────────────────
+        auto* verBox  = new QGroupBox("Проверить контрольную сумму");
+        auto* verForm = new QFormLayout(verBox);
+        verForm->setSpacing(8); verForm->setContentsMargins(12, 8, 12, 8);
+        verForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        verForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+        auto* expectedEdit = new QLineEdit;
+        expectedEdit->setPlaceholderText("Вставьте ожидаемую контрольную сумму (SHA-256 или BLAKE2b-512)…");
+        expectedEdit->setFont(monoFont(10));
+        verForm->addRow("Ожидаемый хэш:", expectedEdit);
+
+        auto* verResult = new QLabel;
+        verResult->setWordWrap(true);
+        verForm->addRow("", verResult);
+
+        auto* verBtn = makeActionBtn("  Проверить", "#0369a1", "#075985", "#7dd3fc");
+        verForm->addRow("", verBtn);
+        vlay->addWidget(verBox);
+        vlay->addStretch(1);
+
+        // Compute on button click
+        connect(calcBtn, &QPushButton::clicked, this, [=, this]() {
+            const QString path = fileEdit->text().trimmed();
+            if (path.isEmpty()) {
+                QMessageBox::warning(this, "Ошибка", "Укажите файл."); return;
+            }
+            if (!QFile::exists(path)) {
+                QMessageBox::warning(this, "Ошибка", "Файл не найден."); return;
+            }
+            if (work_) { QMessageBox::warning(this,"Занято","Дождитесь завершения текущей операции."); return; }
+            sha256Display->clear(); blake2Display->clear();
+            hashProgBar->setVisible(true);
+            setBusy(true);
+            logMsg("Вычисление хэшей: " + path);
+
+            auto sha256Result = std::make_shared<QString>();
+            auto blake2Result = std::make_shared<QString>();
+            work_ = new Worker;
+            work_->task = [p=path.toStdString(), sha256Result, blake2Result]() {
+                *sha256Result = QString::fromStdString(crypto::sha256_file(p));
+                *blake2Result = QString::fromStdString(crypto::blake2b_file(p));
+            };
+            connect(work_, &Worker::done, this, [=, this](bool ok, QString err) {
+                hashProgBar->setVisible(false);
+                setBusy(false);
+                if (ok) {
+                    sha256Display->setText(*sha256Result);
+                    blake2Display->setText(*blake2Result);
+                    logMsg("✓ Хэши вычислены.");
+                } else {
+                    logMsg("✗ Ошибка: " + err);
+                    QMessageBox::critical(this, "Ошибка", err);
+                }
+                work_->deleteLater(); work_ = nullptr;
+            }, Qt::QueuedConnection);
+            work_->start();
+        });
+
+        // Verify button
+        connect(verBtn, &QPushButton::clicked, [=]() {
+            const QString expected = expectedEdit->text().trimmed().toLower();
+            if (expected.isEmpty()) {
+                verResult->setText("Введите ожидаемую контрольную сумму.");
+                verResult->setStyleSheet("color:#f97316;font-size:12px;");
+                return;
+            }
+            const QString sha256 = sha256Display->text().toLower();
+            const QString blake2 = blake2Display->text().toLower();
+            if (sha256.isEmpty() && blake2.isEmpty()) {
+                verResult->setText("Сначала вычислите хэши файла.");
+                verResult->setStyleSheet("color:#f97316;font-size:12px;");
+                return;
+            }
+            if (expected == sha256) {
+                verResult->setText("✓ SHA-256 совпадает — файл не изменён.");
+                verResult->setStyleSheet("color:#22c55e;font-weight:700;font-size:13px;");
+            } else if (expected == blake2) {
+                verResult->setText("✓ BLAKE2b-512 совпадает — файл не изменён.");
+                verResult->setStyleSheet("color:#22c55e;font-weight:700;font-size:13px;");
+            } else {
+                verResult->setText("✗ Ни один хэш не совпал. Файл мог быть изменён.");
+                verResult->setStyleSheet("color:#ef4444;font-weight:700;font-size:13px;");
+            }
+        });
+
+        return w;
+    }
+
 public:
     explicit CryptografWindow(QWidget* parent = nullptr) : QMainWindow(parent) {
         setWindowTitle("Cryptograf — AES-256");
@@ -1528,6 +1705,7 @@ public:
         tabs->addTab(makeBatchTab(),    "05  Пакет");
         tabs->addTab(makeNotesTab(),    "06  Заметки");
         tabs->addTab(makeSettingsTab(), "07  Настройки");
+        tabs->addTab(makeHashTab(),     "08  Целостность");
         vlay->addWidget(tabs, 1);
 
         // Dark log strip

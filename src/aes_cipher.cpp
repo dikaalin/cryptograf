@@ -196,6 +196,33 @@ struct HmacCtx {
 };
 
 // ---------------------------------------------------------------------------
+// Key file mixing — hash key file and append to password before PBKDF2
+// ---------------------------------------------------------------------------
+
+static std::string mix_keyfile(std::string_view password, const std::string& keyfile_path) {
+    if (keyfile_path.empty()) return std::string(password);
+
+    std::ifstream kf(to_fs_path(keyfile_path), std::ios::binary);
+    if (!kf) throw std::runtime_error("Cannot open key file: " + keyfile_path);
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) throw std::runtime_error("EVP_MD_CTX_new failed");
+    EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+    char buf[65536];
+    while (kf.read(buf, sizeof(buf)) || kf.gcount() > 0)
+        EVP_DigestUpdate(ctx, buf, static_cast<size_t>(kf.gcount()));
+    uint8_t hash[32];
+    unsigned int hash_len = 32;
+    EVP_DigestFinal_ex(ctx, hash, &hash_len);
+    EVP_MD_CTX_free(ctx);
+
+    std::string pw(password);
+    pw += '\0';
+    pw.append(reinterpret_cast<const char*>(hash), 32);
+    return pw;
+}
+
+// ---------------------------------------------------------------------------
 // Key derivation — one PBKDF2 call yields 64 bytes
 // ---------------------------------------------------------------------------
 
@@ -634,6 +661,7 @@ void encrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
                   Mode               mode,
+                  const std::string& keyfile_path,
                   ProgressFn         on_progress) {
     std::ifstream in(to_fs_path(in_path), std::ios::binary);
     if (!in) throw std::runtime_error("Cannot open input file: " + in_path);
@@ -659,7 +687,8 @@ void encrypt_file(const std::string& in_path,
             throw std::runtime_error("RAND_bytes (nonce) failed");
     }
 
-    const auto keys = derive_keys(password, salt);
+    const auto eff_pw = mix_keyfile(password, keyfile_path);
+    const auto keys   = derive_keys(eff_pw, salt);
 
     FileHeader hdr{};
     std::memcpy(hdr.magic, FileHeader::MAGIC, 4);
@@ -682,6 +711,7 @@ void encrypt_file(const std::string& in_path,
 void decrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
+                  const std::string& keyfile_path,
                   ProgressFn         on_progress) {
     std::ifstream f(to_fs_path(in_path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
@@ -713,7 +743,8 @@ void decrypt_file(const std::string& in_path,
         throw std::runtime_error("File too short to be a valid .enc file");
     auto cipher_size = static_cast<size_t>(ct_size_off);
 
-    const auto keys = derive_keys(password, salt);
+    const auto eff_pw = mix_keyfile(password, keyfile_path);
+    const auto keys   = derive_keys(eff_pw, salt);
 
     std::ofstream out(to_fs_path(out_path), std::ios::binary);
     if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
@@ -886,6 +917,7 @@ void encrypt_dir(const std::string& dir_path,
                  const std::string& out_path,
                  std::string_view   password,
                  Mode               mode,
+                 const std::string& keyfile_path,
                  ProgressFn         on_progress) {
     const fs::path dir(to_fs_path(dir_path));
     if (!fs::is_directory(dir))
@@ -946,7 +978,8 @@ void encrypt_dir(const std::string& dir_path,
                 throw std::runtime_error("RAND_bytes (nonce) failed");
         }
 
-        const auto keys = derive_keys(password, salt);
+        const auto eff_pw = mix_keyfile(password, keyfile_path);
+        const auto keys   = derive_keys(eff_pw, salt);
 
         FileHeader hdr{};
         std::memcpy(hdr.magic, FileHeader::FOLDER_MAGIC, 4);
@@ -972,6 +1005,7 @@ void encrypt_dir(const std::string& dir_path,
 void decrypt_dir(const std::string& in_path,
                  const std::string& out_dir,
                  std::string_view   password,
+                 const std::string& keyfile_path,
                  ProgressFn         on_progress) {
     std::ifstream f(to_fs_path(in_path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
@@ -1001,7 +1035,8 @@ void decrypt_dir(const std::string& in_path,
     if (ct_size_off < 0) throw std::runtime_error("File too short to be valid");
     auto cipher_size = static_cast<size_t>(ct_size_off);
 
-    const auto keys = derive_keys(password, salt);
+    const auto eff_pw = mix_keyfile(password, keyfile_path);
+    const auto keys   = derive_keys(eff_pw, salt);
 
     // Phase 1: decrypt to CDIR temp blob (0–50 %)
     const fs::path tmp_path = to_fs_path(in_path + ".cdir.tmp");
@@ -1055,6 +1090,77 @@ bool is_dir_archive(const std::string& in_path) {
     f.read(reinterpret_cast<char*>(magic), 4);
     return f.gcount() == 4 &&
            std::memcmp(magic, FileHeader::FOLDER_MAGIC, 4) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// Secure deletion
+// ---------------------------------------------------------------------------
+
+void secure_delete(const std::string& path, int passes) {
+    const auto fspath = to_fs_path(path);
+    std::error_code ec;
+    const auto sz = static_cast<std::streamsize>(fs::file_size(fspath, ec));
+    if (ec || sz <= 0) { fs::remove(fspath); return; }
+
+    {
+        std::fstream f(fspath, std::ios::in | std::ios::out | std::ios::binary);
+        if (!f) throw std::runtime_error("Cannot open for secure deletion: " + path);
+        std::vector<uint8_t> buf(std::min(sz, static_cast<std::streamsize>(65536)));
+        for (int pass = 0; pass < passes; ++pass) {
+            f.seekp(0);
+            std::streamsize rem = sz;
+            while (rem > 0) {
+                const auto n = static_cast<int>(std::min(rem, static_cast<std::streamsize>(buf.size())));
+                RAND_bytes(buf.data(), n);
+                f.write(reinterpret_cast<const char*>(buf.data()), n);
+                rem -= n;
+            }
+            f.flush();
+        }
+    }
+    fs::remove(fspath, ec);
+}
+
+// ---------------------------------------------------------------------------
+// File hash helpers
+// ---------------------------------------------------------------------------
+
+static std::string digest_file(const std::string& path, const EVP_MD* md) {
+    std::ifstream f(to_fs_path(path), std::ios::binary);
+    if (!f) throw std::runtime_error("Cannot open file: " + path);
+
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) throw std::runtime_error("EVP_MD_CTX_new failed");
+    if (EVP_DigestInit_ex(ctx, md, nullptr) != 1) {
+        EVP_MD_CTX_free(ctx); throw std::runtime_error("EVP_DigestInit_ex failed");
+    }
+    char buf[65536];
+    while (f.read(buf, sizeof(buf)) || f.gcount() > 0)
+        EVP_DigestUpdate(ctx, buf, static_cast<size_t>(f.gcount()));
+
+    uint8_t hash[EVP_MAX_MD_SIZE];
+    unsigned int hash_len = 0;
+    if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
+        EVP_MD_CTX_free(ctx); throw std::runtime_error("EVP_DigestFinal_ex failed");
+    }
+    EVP_MD_CTX_free(ctx);
+
+    static constexpr char HEX[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(hash_len * 2);
+    for (unsigned int i = 0; i < hash_len; ++i) {
+        result += HEX[hash[i] >> 4];
+        result += HEX[hash[i] & 0xF];
+    }
+    return result;
+}
+
+std::string sha256_file(const std::string& path) {
+    return digest_file(path, EVP_sha256());
+}
+
+std::string blake2b_file(const std::string& path) {
+    return digest_file(path, EVP_blake2b512());
 }
 
 }  // namespace crypto

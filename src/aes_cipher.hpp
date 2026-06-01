@@ -86,15 +86,19 @@ DerivedKeys derive_keys(std::string_view password, const Salt& salt);
 Salt        random_salt();
 IV          random_iv();
 
+// keyfile_path: optional second factor — SHA-256(keyfile) is mixed into
+// key derivation. The same file must be present for decryption.
 void encrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
                   Mode               mode,
+                  const std::string& keyfile_path = {},
                   ProgressFn         on_progress = nullptr);
 
 void decrypt_file(const std::string& in_path,
                   const std::string& out_path,
                   std::string_view   password,
+                  const std::string& keyfile_path = {},
                   ProgressFn         on_progress = nullptr);
 
 // Folder encryption: packs dir_path into a CDIR archive then encrypts it.
@@ -102,15 +106,24 @@ void encrypt_dir(const std::string& dir_path,
                  const std::string& out_path,
                  std::string_view   password,
                  Mode               mode,
+                 const std::string& keyfile_path = {},
                  ProgressFn         on_progress = nullptr);
 
 // Folder decryption: decrypts the archive then extracts into out_dir.
 void decrypt_dir(const std::string& in_path,
                  const std::string& out_dir,
                  std::string_view   password,
+                 const std::string& keyfile_path = {},
                  ProgressFn         on_progress = nullptr);
 
 // Returns true when in_path is an encrypted folder archive (FOLDER_MAGIC).
 bool is_dir_archive(const std::string& in_path);
+
+// Secure file deletion: overwrites with random bytes (passes times) then removes.
+void secure_delete(const std::string& path, int passes = 3);
+
+// File hash functions — return lowercase hex string.
+std::string sha256_file(const std::string& path);
+std::string blake2b_file(const std::string& path);
 
 }  // namespace crypto
