@@ -1551,7 +1551,7 @@ public:
         statusBar()->setStyleSheet(
             "QStatusBar { background:#1a1b26;color:#565f89;font-size:11px;border:none; }");
         statusBar()->showMessage("Готово.");
-        logMsg("Cryptograf запущен. Режимы: ECB, CBC, CFB, OFB, CTR, GCM, CCM, GCM-SIV, SIV.");
+        logMsg("Cryptograf запущен. Режимы: ECB, CBC, CFB, OFB, CTR, GCM, CCM, GCM-SIV, SIV, EAX, OCB.");
     }
 };
 
