@@ -226,13 +226,13 @@ static std::string mix_keyfile(std::string_view password, const std::string& key
 // Key derivation — one PBKDF2 call yields 64 bytes
 // ---------------------------------------------------------------------------
 
-DerivedKeys derive_keys(std::string_view password, const Salt& salt) {
+DerivedKeys derive_keys(std::string_view password, const Salt& salt, size_t iterations) {
     std::array<uint8_t, TOTAL_KEY_LEN> raw{};
     if (!PKCS5_PBKDF2_HMAC(password.data(),
                             static_cast<int>(password.size()),
                             salt.data(),
                             static_cast<int>(salt.size()),
-                            PBKDF2_ITERATIONS,
+                            static_cast<int>(iterations),
                             EVP_sha256(),
                             static_cast<int>(raw.size()),
                             raw.data()))
@@ -662,6 +662,7 @@ void encrypt_file(const std::string& in_path,
                   std::string_view   password,
                   Mode               mode,
                   const std::string& keyfile_path,
+                  size_t             kdf_iterations,
                   ProgressFn         on_progress) {
     std::ifstream in(to_fs_path(in_path), std::ios::binary);
     if (!in) throw std::runtime_error("Cannot open input file: " + in_path);
@@ -688,13 +689,14 @@ void encrypt_file(const std::string& in_path,
     }
 
     const auto eff_pw = mix_keyfile(password, keyfile_path);
-    const auto keys   = derive_keys(eff_pw, salt);
+    const auto keys   = derive_keys(eff_pw, salt, kdf_iterations);
 
     FileHeader hdr{};
     std::memcpy(hdr.magic, FileHeader::MAGIC, 4);
     hdr.mode = static_cast<uint8_t>(mode);
     std::memcpy(hdr.salt, salt.data(), SALT_LEN);
     std::memcpy(hdr.iv,   iv.data(),   IV_LEN);
+    hdr.kdf_iterations = static_cast<uint32_t>(kdf_iterations);
     out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
     if (!out) throw std::runtime_error("Write error on header");
 
@@ -716,35 +718,50 @@ void decrypt_file(const std::string& in_path,
     std::ifstream f(to_fs_path(in_path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
 
-    uint8_t raw_hdr[sizeof(FileHeader)];
-    f.read(reinterpret_cast<char*>(raw_hdr), sizeof(raw_hdr));
-    if (f.gcount() != static_cast<std::streamsize>(sizeof(raw_hdr)))
+    // Read first 4 bytes to detect format version
+    uint8_t magic_buf[4];
+    f.read(reinterpret_cast<char*>(magic_buf), 4);
+    if (f.gcount() != 4) throw std::runtime_error("File too short or not a valid .enc file");
+
+    const bool is_v4 = (std::memcmp(magic_buf, FileHeader::MAGIC,        4) == 0);
+    const bool is_v3 = (std::memcmp(magic_buf, FileHeader::MAGIC_V3,     4) == 0);
+    if (!is_v3 && !is_v4)
+        throw std::runtime_error("Invalid file header — not a valid .enc file");
+
+    const size_t hdr_sz = is_v4 ? sizeof(FileHeader) : HEADER_V3_SIZE;
+    std::vector<uint8_t> raw_hdr(hdr_sz);
+    std::memcpy(raw_hdr.data(), magic_buf, 4);
+    f.read(reinterpret_cast<char*>(raw_hdr.data() + 4), static_cast<std::streamsize>(hdr_sz - 4));
+    if (f.gcount() != static_cast<std::streamsize>(hdr_sz - 4))
         throw std::runtime_error("File too short or not a valid .enc file");
 
-    FileHeader hdr{};
-    std::memcpy(&hdr, raw_hdr, sizeof(hdr));
-    if (std::memcmp(hdr.magic, FileHeader::MAGIC, 4) != 0)
-        throw std::runtime_error("Invalid file header — not a v3 .enc file");
-    if (hdr.mode > static_cast<uint8_t>(Mode::OCB))
+    const uint8_t mode_byte = raw_hdr[4];
+    if (mode_byte > static_cast<uint8_t>(Mode::OCB))
         throw std::runtime_error("Unknown cipher mode in file header");
+    const auto mode = static_cast<Mode>(mode_byte);
 
-    const auto mode = static_cast<Mode>(hdr.mode);
+    Salt salt{}; IV iv{};
+    std::memcpy(salt.data(), raw_hdr.data() + 5,            SALT_LEN);
+    std::memcpy(iv.data(),   raw_hdr.data() + 5 + SALT_LEN, IV_LEN);
 
-    Salt salt{};  IV iv{};
-    std::memcpy(salt.data(), hdr.salt, SALT_LEN);
-    std::memcpy(iv.data(),   hdr.iv,   IV_LEN);
+    size_t iterations = PBKDF2_ITERATIONS;
+    if (is_v4) {
+        uint32_t iter_le = 0;
+        std::memcpy(&iter_le, raw_hdr.data() + 5 + SALT_LEN + IV_LEN, 4);
+        if (iter_le > 0) iterations = iter_le;
+    }
 
     f.seekg(0, std::ios::end);
     auto file_size   = static_cast<std::streamoff>(f.tellg());
     auto tag_size    = static_cast<std::streamoff>(auth_tag_size(mode));
-    auto hdr_size    = static_cast<std::streamoff>(sizeof(FileHeader));
+    auto hdr_size    = static_cast<std::streamoff>(hdr_sz);
     auto ct_size_off = file_size - hdr_size - tag_size;
     if (ct_size_off < 0)
         throw std::runtime_error("File too short to be a valid .enc file");
     auto cipher_size = static_cast<size_t>(ct_size_off);
 
     const auto eff_pw = mix_keyfile(password, keyfile_path);
-    const auto keys   = derive_keys(eff_pw, salt);
+    const auto keys   = derive_keys(eff_pw, salt, iterations);
 
     std::ofstream out(to_fs_path(out_path), std::ios::binary);
     if (!out) throw std::runtime_error("Cannot open output file: " + out_path);
@@ -752,7 +769,7 @@ void decrypt_file(const std::string& in_path,
     if (mode_is_aead(mode))
         decrypt_aead(f, out, keys, mode, iv, cipher_size, on_progress);
     else
-        decrypt_non_aead(f, out, raw_hdr, sizeof(raw_hdr),
+        decrypt_non_aead(f, out, raw_hdr.data(), hdr_sz,
                          keys, mode, iv, cipher_size, on_progress);
 
     if (!out) throw std::runtime_error("Write error on output file");
@@ -918,6 +935,7 @@ void encrypt_dir(const std::string& dir_path,
                  std::string_view   password,
                  Mode               mode,
                  const std::string& keyfile_path,
+                 size_t             kdf_iterations,
                  ProgressFn         on_progress) {
     const fs::path dir(to_fs_path(dir_path));
     if (!fs::is_directory(dir))
@@ -979,13 +997,14 @@ void encrypt_dir(const std::string& dir_path,
         }
 
         const auto eff_pw = mix_keyfile(password, keyfile_path);
-        const auto keys   = derive_keys(eff_pw, salt);
+        const auto keys   = derive_keys(eff_pw, salt, kdf_iterations);
 
         FileHeader hdr{};
         std::memcpy(hdr.magic, FileHeader::FOLDER_MAGIC, 4);
         hdr.mode = static_cast<uint8_t>(mode);
         std::memcpy(hdr.salt, salt.data(), SALT_LEN);
         std::memcpy(hdr.iv,   iv.data(),   IV_LEN);
+        hdr.kdf_iterations = static_cast<uint32_t>(kdf_iterations);
         out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
         if (!out) throw std::runtime_error("Write error on header");
 
@@ -1010,33 +1029,48 @@ void decrypt_dir(const std::string& in_path,
     std::ifstream f(to_fs_path(in_path), std::ios::binary);
     if (!f) throw std::runtime_error("Cannot open input file: " + in_path);
 
-    uint8_t raw_hdr[sizeof(FileHeader)];
-    f.read(reinterpret_cast<char*>(raw_hdr), sizeof(raw_hdr));
-    if (f.gcount() != static_cast<std::streamsize>(sizeof(raw_hdr)))
+    uint8_t magic_buf[4];
+    f.read(reinterpret_cast<char*>(magic_buf), 4);
+    if (f.gcount() != 4) throw std::runtime_error("File too short");
+
+    const bool is_v4 = (std::memcmp(magic_buf, FileHeader::FOLDER_MAGIC,    4) == 0);
+    const bool is_v3 = (std::memcmp(magic_buf, FileHeader::FOLDER_MAGIC_V3, 4) == 0);
+    if (!is_v3 && !is_v4)
+        throw std::runtime_error("Not a folder archive (.enc folder)");
+
+    const size_t hdr_sz = is_v4 ? sizeof(FileHeader) : HEADER_V3_SIZE;
+    std::vector<uint8_t> raw_hdr(hdr_sz);
+    std::memcpy(raw_hdr.data(), magic_buf, 4);
+    f.read(reinterpret_cast<char*>(raw_hdr.data() + 4), static_cast<std::streamsize>(hdr_sz - 4));
+    if (f.gcount() != static_cast<std::streamsize>(hdr_sz - 4))
         throw std::runtime_error("File too short");
 
-    FileHeader hdr{};
-    std::memcpy(&hdr, raw_hdr, sizeof(hdr));
-    if (std::memcmp(hdr.magic, FileHeader::FOLDER_MAGIC, 4) != 0)
-        throw std::runtime_error("Not a folder archive (.enc folder)");
-    if (hdr.mode > static_cast<uint8_t>(Mode::OCB))
+    const uint8_t mode_byte = raw_hdr[4];
+    if (mode_byte > static_cast<uint8_t>(Mode::OCB))
         throw std::runtime_error("Unknown cipher mode in file header");
+    const auto mode = static_cast<Mode>(mode_byte);
 
-    const auto mode = static_cast<Mode>(hdr.mode);
     Salt salt{}; IV iv{};
-    std::memcpy(salt.data(), hdr.salt, SALT_LEN);
-    std::memcpy(iv.data(),   hdr.iv,   IV_LEN);
+    std::memcpy(salt.data(), raw_hdr.data() + 5,            SALT_LEN);
+    std::memcpy(iv.data(),   raw_hdr.data() + 5 + SALT_LEN, IV_LEN);
+
+    size_t iterations = PBKDF2_ITERATIONS;
+    if (is_v4) {
+        uint32_t iter_le = 0;
+        std::memcpy(&iter_le, raw_hdr.data() + 5 + SALT_LEN + IV_LEN, 4);
+        if (iter_le > 0) iterations = iter_le;
+    }
 
     f.seekg(0, std::ios::end);
     auto file_size   = static_cast<std::streamoff>(f.tellg());
     auto tag_size    = static_cast<std::streamoff>(auth_tag_size(mode));
-    auto hdr_size    = static_cast<std::streamoff>(sizeof(FileHeader));
+    auto hdr_size    = static_cast<std::streamoff>(hdr_sz);
     auto ct_size_off = file_size - hdr_size - tag_size;
     if (ct_size_off < 0) throw std::runtime_error("File too short to be valid");
     auto cipher_size = static_cast<size_t>(ct_size_off);
 
     const auto eff_pw = mix_keyfile(password, keyfile_path);
-    const auto keys   = derive_keys(eff_pw, salt);
+    const auto keys   = derive_keys(eff_pw, salt, iterations);
 
     // Phase 1: decrypt to CDIR temp blob (0–50 %)
     const fs::path tmp_path = to_fs_path(in_path + ".cdir.tmp");
@@ -1056,7 +1090,7 @@ void decrypt_dir(const std::string& in_path,
             if (mode_is_aead(mode))
                 decrypt_aead(f, tmp_out, keys, mode, iv, cipher_size, dec_fn);
             else
-                decrypt_non_aead(f, tmp_out, raw_hdr, sizeof(raw_hdr),
+                decrypt_non_aead(f, tmp_out, raw_hdr.data(), hdr_sz,
                                  keys, mode, iv, cipher_size, dec_fn);
         }
 

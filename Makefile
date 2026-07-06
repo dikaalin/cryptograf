@@ -15,7 +15,7 @@ LDFLAGS  := -lssl -lcrypto
 
 MOC      := /usr/lib/qt6/libexec/moc
 QT_FLAGS := $(shell pkg-config --cflags Qt6Widgets) -I/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6 -I/tmp/qt6svg-dev/usr/include/x86_64-linux-gnu/qt6/QtSvg
-QT_LIBS  := $(shell pkg-config --libs Qt6Widgets) /tmp/qt6svg-dev/usr/lib/x86_64-linux-gnu/libQt6Svg.so.6
+QT_LIBS  := $(shell pkg-config --libs Qt6Widgets) /usr/lib/x86_64-linux-gnu/libQt6Svg.so.6
 
 SRCS     := src/main.cpp src/aes_cipher.cpp src/gcmsiv.cpp
 BIN      := cryptograf

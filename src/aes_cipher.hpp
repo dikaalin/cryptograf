@@ -62,27 +62,36 @@ struct DerivedKeys {
 // Called from a worker thread; must be thread-safe (Qt signals are fine).
 using ProgressFn = std::function<void(int64_t, int64_t)>;
 
-// File format (v3):
-//   [4]    magic  "AES\x03"  (file) | "AES\x04" (folder archive)
-//   [1]    mode   (uint8_t)
-//   [16]   salt   (PBKDF2 salt)
-//   [16]   iv     (non-AEAD: full 16-byte IV; GCM/CCM/GCM-SIV: 12-byte nonce in [0..11];
-//                  SIV: unused zeros)
-//   ---- header ends (37 bytes) ----
-//   [N]    ciphertext
-//   [32]   HMAC-SHA256(mac_key, header||ciphertext)   ← non-AEAD only
-//   [16]   AEAD auth tag                              ← AEAD only
-struct FileHeader {
-    static constexpr char MAGIC[4]        = {'A', 'E', 'S', '\x03'};
-    static constexpr char FOLDER_MAGIC[4] = {'A', 'E', 'S', '\x04'};
-    uint8_t magic[4];
-    uint8_t mode;
-    uint8_t salt[SALT_LEN];
-    uint8_t iv[IV_LEN];
+// File format v3 (legacy, magic \x03/\x04, 37-byte header):
+//   [4]  magic "AES\x03" (file) | "AES\x04" (folder), [1] mode, [16] salt, [16] iv
+// File format v4 (current, magic \x05/\x06, 41-byte header):
+//   [4]  magic "AES\x05" (file) | "AES\x06" (folder)
+//   [1]  mode (uint8_t)
+//   [16] salt (PBKDF2 salt)
+//   [16] iv   (non-AEAD: full 16-byte IV; AEAD: 12-byte nonce in [0..11])
+//   [4]  kdf_iterations (uint32_t, little-endian)
+//   ---- header ends (41 bytes) ----
+//   [N]  ciphertext
+//   [32] HMAC-SHA256(mac_key, header||ciphertext)  ← non-AEAD only
+//   [16] AEAD auth tag                             ← AEAD only
+struct __attribute__((packed)) FileHeader {
+    // v3 (legacy) magic — recognised during decryption only
+    static constexpr char MAGIC_V3[4]        = {'A', 'E', 'S', '\x03'};
+    static constexpr char FOLDER_MAGIC_V3[4] = {'A', 'E', 'S', '\x04'};
+    // v4 (current) magic — written by all new encrypt calls
+    static constexpr char MAGIC[4]        = {'A', 'E', 'S', '\x05'};
+    static constexpr char FOLDER_MAGIC[4] = {'A', 'E', 'S', '\x06'};
+    uint8_t  magic[4];
+    uint8_t  mode;
+    uint8_t  salt[SALT_LEN];
+    uint8_t  iv[IV_LEN];
+    uint32_t kdf_iterations;   // PBKDF2 iteration count (little-endian)
 };
-static_assert(sizeof(FileHeader) == 37);
+static_assert(sizeof(FileHeader) == 41);
+static constexpr size_t HEADER_V3_SIZE = 37;  // legacy header without kdf_iterations
 
-DerivedKeys derive_keys(std::string_view password, const Salt& salt);
+DerivedKeys derive_keys(std::string_view password, const Salt& salt,
+                        size_t iterations = PBKDF2_ITERATIONS);
 Salt        random_salt();
 IV          random_iv();
 
@@ -93,6 +102,7 @@ void encrypt_file(const std::string& in_path,
                   std::string_view   password,
                   Mode               mode,
                   const std::string& keyfile_path = {},
+                  size_t             kdf_iterations = PBKDF2_ITERATIONS,
                   ProgressFn         on_progress = nullptr);
 
 void decrypt_file(const std::string& in_path,
@@ -107,6 +117,7 @@ void encrypt_dir(const std::string& dir_path,
                  std::string_view   password,
                  Mode               mode,
                  const std::string& keyfile_path = {},
+                 size_t             kdf_iterations = PBKDF2_ITERATIONS,
                  ProgressFn         on_progress = nullptr);
 
 // Folder decryption: decrypts the archive then extracts into out_dir.
