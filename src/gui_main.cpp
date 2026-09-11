@@ -144,13 +144,6 @@ static int calcStrength(const QString& pw) {
     return std::min(std::max(s, 1), 4);
 }
 
-QString toHex(const uint8_t* data, size_t n) {
-    QString s; s.reserve(int(n) * 2);
-    for (size_t i = 0; i < n; ++i)
-        s += QString("%1").arg(data[i], 2, 16, QChar('0'));
-    return s;
-}
-
 static QString lastDir() {
     return QSettings("Cryptograf","Cryptograf").value("lastDir", QDir::homePath()).toString();
 }
@@ -234,6 +227,7 @@ struct EncParts {
     bool       is_aead;
     bool       is_folder;
     QString    mode_name;
+    uint32_t   kdf_iterations = 0;
 };
 
 std::optional<EncParts> parseEncFile(const QString& path) {
@@ -246,7 +240,7 @@ std::optional<EncParts> parseEncFile(const QString& path) {
     const bool is_file   = std::memcmp(hdr.magic, crypto::FileHeader::MAGIC,        4) == 0;
     const bool is_folder = std::memcmp(hdr.magic, crypto::FileHeader::FOLDER_MAGIC, 4) == 0;
     if (!is_file && !is_folder) return {};
-    if (hdr.mode > static_cast<uint8_t>(crypto::Mode::SIV)) return {};
+    if (hdr.mode > static_cast<uint8_t>(crypto::Mode::OCB)) return {};
     const auto   mode = static_cast<crypto::Mode>(hdr.mode);
     const qint64 tsz  = static_cast<qint64>(crypto::auth_tag_size(mode));
     if (fsz < hsz + tsz) return {};
@@ -260,7 +254,8 @@ std::optional<EncParts> parseEncFile(const QString& path) {
         QByteArray(reinterpret_cast<const char*>(hdr.iv),   crypto::IV_LEN),
         crypto::mode_is_aead(mode),
         is_folder,
-        QString::fromStdString(crypto::mode_to_string(mode))
+        QString::fromStdString(crypto::mode_to_string(mode)),
+        hdr.kdf_iterations > 0 ? hdr.kdf_iterations : static_cast<uint32_t>(crypto::PBKDF2_ITERATIONS)
     };
 }
 
@@ -290,7 +285,7 @@ QString buildFileInfo(const QString& path) {
         .arg(QString::fromLatin1(p->iv.toHex()))
         .arg(p->is_aead ? "Тег AEAD     " : "HMAC-SHA256  ")
         .arg(QString::fromLatin1(p->tag.toHex()))
-        .arg(crypto::PBKDF2_ITERATIONS)
+        .arg(p->kdf_iterations)
         .arg(p->is_aead ? "AEAD-тег (16 байт, встроен в файл)"
                         : "Encrypt-then-MAC (HMAC-SHA256, 32 байта)");
     // bgcolor and <font color> map to QTextFrameFormat/QTextCharFormat inside Qt's
