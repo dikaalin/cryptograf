@@ -19,3 +19,17 @@ test_*
 .idea/
 *.swp
 *~
+
+# Object files / local build dirs
+*.o
+build_check/
+
+# Local junk (not part of the project)
+*.deb
+*.docx
+*.png
+!resources/**/*.png
+manifest-*.json
+/12345
+/13
+/Crypto
