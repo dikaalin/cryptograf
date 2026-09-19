@@ -20,16 +20,5 @@ test_*
 *.swp
 *~
 
-# Object files / local build dirs
-*.o
-build_check/
-
-# Local junk (not part of the project)
-*.deb
-*.docx
-*.png
-!resources/**/*.png
+# Personal account export (contains private download links)
 manifest-*.json
-/12345
-/13
-/Crypto

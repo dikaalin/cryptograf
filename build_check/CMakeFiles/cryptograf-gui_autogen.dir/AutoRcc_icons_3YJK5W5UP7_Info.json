@@ -1,0 +1,27 @@
+{
+	"BUILD_DIR" : "/home/pablo/Cryptograf/build_check/cryptograf-gui_autogen",
+	"CMAKE_BINARY_DIR" : "/home/pablo/Cryptograf/build_check",
+	"CMAKE_CURRENT_BINARY_DIR" : "/home/pablo/Cryptograf/build_check",
+	"CMAKE_CURRENT_SOURCE_DIR" : "/home/pablo/Cryptograf",
+	"CMAKE_SOURCE_DIR" : "/home/pablo/Cryptograf",
+	"GENERATOR" : "Unix Makefiles",
+	"INCLUDE_DIR" : "/home/pablo/Cryptograf/build_check/cryptograf-gui_autogen/include",
+	"INPUTS" : 
+	[
+		"/home/pablo/Cryptograf/resources/cryptograf.png",
+		"/home/pablo/Cryptograf/resources/diagrams/decrypt.svg",
+		"/home/pablo/Cryptograf/resources/diagrams/encrypt.svg",
+		"/home/pablo/Cryptograf/resources/diagrams/info.svg",
+		"/home/pablo/Cryptograf/resources/diagrams/sign.svg"
+	],
+	"LOCK_FILE" : "/home/pablo/Cryptograf/build_check/CMakeFiles/cryptograf-gui_autogen.dir/AutoRcc_icons_3YJK5W5UP7_Lock.lock",
+	"MULTI_CONFIG" : false,
+	"OPTIONS" : [ "-name", "icons" ],
+	"OUTPUT_CHECKSUM" : "3YJK5W5UP7",
+	"OUTPUT_NAME" : "qrc_icons.cpp",
+	"RCC_EXECUTABLE" : "/usr/lib/qt6/libexec/rcc",
+	"RCC_LIST_OPTIONS" : [ "--list" ],
+	"SETTINGS_FILE" : "/home/pablo/Cryptograf/build_check/CMakeFiles/cryptograf-gui_autogen.dir/AutoRcc_icons_3YJK5W5UP7_Used.txt",
+	"SOURCE" : "/home/pablo/Cryptograf/resources/icons.qrc",
+	"VERBOSITY" : 0
+}
